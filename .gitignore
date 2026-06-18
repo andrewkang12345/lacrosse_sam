@@ -1,0 +1,17 @@
+# Generated media and model outputs
+outputs/
+checkpoints/
+third_party/
+
+# Local model/data downloads
+data/SMPL_python_v.1.1.0/
+data/SMPL_python_v.1.1.0*.zip
+
+# Python/runtime caches
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Local secrets and environment files
+.env
+.env.*

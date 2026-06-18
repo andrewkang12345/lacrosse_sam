@@ -4,6 +4,7 @@ Small workflow for segmenting and tracking lacrosse players in a 10 second clip 
 
 - SAM3 text prompts through Hugging Face Transformers
 - SAM2 click prompts through Hugging Face Transformers
+- SAM-Body4D / SAM-3D-Body for per-player human meshes
 - A local browser click annotator for interactive player prompts
 - H.264 MP4 outputs viewable in VS Code
 
@@ -114,6 +115,7 @@ HF_TOKEN="$HF_TOKEN" python scripts/track_sam3_text.py \
   --text 'lacrosse player' \
   --model facebook/sam3 \
   --output outputs/sam3_text_lacrosse_player.mp4 \
+  --mask-dir outputs/sam3_text_label_masks \
   --fps 10
 ```
 
@@ -122,6 +124,79 @@ Outputs:
 ```bash
 outputs/sam3_text_lacrosse_player.mp4
 outputs/sam3_text_lacrosse_player.json
+outputs/sam3_text_label_masks/
+```
+
+## 5. Run SAM-Body4D Meshes
+
+Install and download SAM-Body4D assets from its repo, then run the box-driven mesh pipeline from the SAM3 text output. Use `--render-mode overlay` to composite meshes on the original camera frames:
+
+```bash
+PYOPENGL_PLATFORM=egl python scripts/run_sam_body4d_from_sam3_boxes.py \
+  --repo-root third_party/sam-body4d \
+  --config third_party/sam-body4d/configs/body4d.yaml \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_text_player_masks.json \
+  --output-dir outputs/sam_body4d_player_overlay \
+  --output-video outputs/sam_body4d_player_overlay_h264.mp4 \
+  --render-mode overlay \
+  --fps 10
+```
+
+Outputs:
+
+```bash
+outputs/sam_body4d_player_overlay_h264.mp4
+outputs/sam_body4d_player_overlay_review_sheet.jpg
+outputs/sam_body4d_player_overlay/mesh_4d_individual/<object_id>/*.ply
+outputs/sam_body4d_player_overlay/focal_4d_individual/<object_id>/*.json
+outputs/sam_body4d_player_overlay/metadata.json
+```
+
+## 6. Run 4D-Humans Meshes
+
+Place the neutral SMPL model where the repo can load it, or convert it into the 4D-Humans cache:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import collections, inspect, sys
+import numpy as np
+if not hasattr(inspect, 'getargspec'):
+    ArgSpec = collections.namedtuple('ArgSpec', 'args varargs keywords defaults')
+    inspect.getargspec = lambda fn: ArgSpec(*inspect.getfullargspec(fn)[:4])
+for name, value in {'bool': bool, 'int': int, 'float': float, 'complex': complex, 'object': object, 'str': str, 'unicode': str}.items():
+    if not hasattr(np, name):
+        setattr(np, name, value)
+sys.path.insert(0, str(Path('third_party/4D-Humans').resolve()))
+from hmr2.models import convert_pkl
+src = 'data/SMPL_python_v.1.1.0/smpl/models/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl'
+dst = Path.home() / '.cache/4DHumans/data/smpl/SMPL_NEUTRAL.pkl'
+dst.parent.mkdir(parents=True, exist_ok=True)
+convert_pkl(src, str(dst))
+PY
+```
+
+Then run HMR2 from the same SAM3 `player` boxes:
+
+```bash
+PYOPENGL_PLATFORM=egl python scripts/run_4d_humans_from_sam3_boxes.py \
+  --repo-root third_party/4D-Humans \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_text_player_masks.json \
+  --output-dir outputs/4d_humans_sam3_player \
+  --output-video outputs/4d_humans_sam3_player_h264.mp4 \
+  --fps 10 \
+  --save-mesh
+```
+
+Outputs:
+
+```bash
+outputs/4d_humans_sam3_player_h264.mp4
+outputs/4d_humans_sam3_player_review_sheet.jpg
+outputs/4d_humans_sam3_player/meshes_obj/<object_id>/*.obj
+outputs/4d_humans_sam3_player/metadata.json
 ```
 
 ## Output Video Format
@@ -141,6 +216,9 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/click_annotator.py`: local web UI for collecting full-resolution player clicks.
 - `scripts/track_sam2_clicks.py`: runs SAM2 video tracking from click prompts.
 - `scripts/track_sam3_text.py`: runs SAM3 video tracking from a text prompt.
+- `scripts/run_sam_body4d_from_masks.py`: runs SAM-Body4D from exported label masks.
+- `scripts/run_sam_body4d_from_sam3_boxes.py`: runs SAM-Body4D from SAM3 text detections, preserving multiple players.
+- `scripts/run_4d_humans_from_sam3_boxes.py`: runs 4D-Humans/HMR2 from SAM3 text detections and overlays SMPL meshes on the camera video.
 - `scripts/video_utils.py`: shared frame loading, mask overlay, coordinate grid, and H.264 writing helpers.
 
 ## Notes
@@ -148,6 +226,7 @@ This makes the MP4 files viewable in VS Code.
 - The current workflow uses 100 frames: 10 seconds at 10 fps.
 - SAM2 click tracking is usually the corrective pass for exact player coverage.
 - SAM3 text tracking is useful as an automatic baseline, but may miss early frames or create extra detections.
+- The SAM-Body4D box pipeline uses SAM3 text boxes as rectangular person prompts. This avoids collapsed single-ID label masks and produces separate meshes per detected player, but early frames can be sparse if SAM3 detects few players.
 - If `kernels` causes import errors with Transformers, uninstall it:
 
 ```bash

@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompts", required=True)
     parser.add_argument("--model", default="facebook/sam2.1-hiera-large")
     parser.add_argument("--output", default="outputs/sam2_click_tracks.mp4")
+    parser.add_argument("--mask-dir", default=None)
     parser.add_argument("--fps", type=float, default=10.0)
     return parser.parse_args()
 
@@ -75,6 +76,11 @@ def main() -> None:
             model(inference_session=inference_session, frame_idx=frame_idx)
 
     rendered_frames = []
+    mask_dir = Path(args.mask_dir) if args.mask_dir else None
+    if mask_dir:
+        mask_dir.mkdir(parents=True, exist_ok=True)
+        for path in mask_dir.glob("*.png"):
+            path.unlink()
     metadata = {
         "model": args.model,
         "fps": args.fps,
@@ -94,6 +100,24 @@ def main() -> None:
                 for i, obj_id in enumerate(inference_session.obj_ids)
                 if i < video_res_masks.shape[0]
             }
+            if mask_dir:
+                import numpy as np
+                from PIL import Image
+
+                obj_ids = [int(obj_id) for obj_id in masks_by_id]
+                logits = np.stack(
+                    [
+                        np.squeeze(masks_by_id[obj_id].detach().float().cpu().numpy())
+                        for obj_id in obj_ids
+                    ],
+                    axis=0,
+                )
+                best = logits.argmax(axis=0)
+                score = logits.max(axis=0)
+                label_mask = np.zeros(score.shape, dtype=np.uint8)
+                for i, obj_id in enumerate(obj_ids):
+                    label_mask[(best == i) & (score > 0)] = min(int(obj_id), 255)
+                Image.fromarray(label_mask, mode="P").save(mask_dir / f"{output.frame_idx:08d}.png")
             rendered_frames.append(overlay_masks(frames[output.frame_idx], masks_by_id))
             metadata["frames"].append(
                 {
