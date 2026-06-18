@@ -1,0 +1,518 @@
+{
+  "source_video": "data/lacrosse_long_source_iniyaa.mp4",
+  "frames_dir": "data/frames_10fps",
+  "fps": 10.0,
+  "seconds": 10.0,
+  "width": 1280,
+  "height": 720,
+  "frames": [
+    {
+      "frame": 0,
+      "time_sec": 0.0,
+      "source_frame": 0
+    },
+    {
+      "frame": 1,
+      "time_sec": 0.1,
+      "source_frame": 3
+    },
+    {
+      "frame": 2,
+      "time_sec": 0.2,
+      "source_frame": 6
+    },
+    {
+      "frame": 3,
+      "time_sec": 0.3,
+      "source_frame": 9
+    },
+    {
+      "frame": 4,
+      "time_sec": 0.4,
+      "source_frame": 12
+    },
+    {
+      "frame": 5,
+      "time_sec": 0.5,
+      "source_frame": 15
+    },
+    {
+      "frame": 6,
+      "time_sec": 0.6,
+      "source_frame": 18
+    },
+    {
+      "frame": 7,
+      "time_sec": 0.7,
+      "source_frame": 21
+    },
+    {
+      "frame": 8,
+      "time_sec": 0.8,
+      "source_frame": 24
+    },
+    {
+      "frame": 9,
+      "time_sec": 0.9,
+      "source_frame": 27
+    },
+    {
+      "frame": 10,
+      "time_sec": 1.0,
+      "source_frame": 30
+    },
+    {
+      "frame": 11,
+      "time_sec": 1.1,
+      "source_frame": 33
+    },
+    {
+      "frame": 12,
+      "time_sec": 1.2,
+      "source_frame": 36
+    },
+    {
+      "frame": 13,
+      "time_sec": 1.3,
+      "source_frame": 39
+    },
+    {
+      "frame": 14,
+      "time_sec": 1.4,
+      "source_frame": 42
+    },
+    {
+      "frame": 15,
+      "time_sec": 1.5,
+      "source_frame": 45
+    },
+    {
+      "frame": 16,
+      "time_sec": 1.6,
+      "source_frame": 48
+    },
+    {
+      "frame": 17,
+      "time_sec": 1.7,
+      "source_frame": 51
+    },
+    {
+      "frame": 18,
+      "time_sec": 1.8,
+      "source_frame": 54
+    },
+    {
+      "frame": 19,
+      "time_sec": 1.9,
+      "source_frame": 57
+    },
+    {
+      "frame": 20,
+      "time_sec": 2.0,
+      "source_frame": 60
+    },
+    {
+      "frame": 21,
+      "time_sec": 2.1,
+      "source_frame": 63
+    },
+    {
+      "frame": 22,
+      "time_sec": 2.2,
+      "source_frame": 66
+    },
+    {
+      "frame": 23,
+      "time_sec": 2.3,
+      "source_frame": 69
+    },
+    {
+      "frame": 24,
+      "time_sec": 2.4,
+      "source_frame": 72
+    },
+    {
+      "frame": 25,
+      "time_sec": 2.5,
+      "source_frame": 75
+    },
+    {
+      "frame": 26,
+      "time_sec": 2.6,
+      "source_frame": 78
+    },
+    {
+      "frame": 27,
+      "time_sec": 2.7,
+      "source_frame": 81
+    },
+    {
+      "frame": 28,
+      "time_sec": 2.8,
+      "source_frame": 84
+    },
+    {
+      "frame": 29,
+      "time_sec": 2.9,
+      "source_frame": 87
+    },
+    {
+      "frame": 30,
+      "time_sec": 3.0,
+      "source_frame": 90
+    },
+    {
+      "frame": 31,
+      "time_sec": 3.1,
+      "source_frame": 93
+    },
+    {
+      "frame": 32,
+      "time_sec": 3.2,
+      "source_frame": 96
+    },
+    {
+      "frame": 33,
+      "time_sec": 3.3,
+      "source_frame": 99
+    },
+    {
+      "frame": 34,
+      "time_sec": 3.4,
+      "source_frame": 102
+    },
+    {
+      "frame": 35,
+      "time_sec": 3.5,
+      "source_frame": 105
+    },
+    {
+      "frame": 36,
+      "time_sec": 3.6,
+      "source_frame": 108
+    },
+    {
+      "frame": 37,
+      "time_sec": 3.7,
+      "source_frame": 111
+    },
+    {
+      "frame": 38,
+      "time_sec": 3.8,
+      "source_frame": 114
+    },
+    {
+      "frame": 39,
+      "time_sec": 3.9,
+      "source_frame": 117
+    },
+    {
+      "frame": 40,
+      "time_sec": 4.0,
+      "source_frame": 120
+    },
+    {
+      "frame": 41,
+      "time_sec": 4.1,
+      "source_frame": 123
+    },
+    {
+      "frame": 42,
+      "time_sec": 4.2,
+      "source_frame": 126
+    },
+    {
+      "frame": 43,
+      "time_sec": 4.3,
+      "source_frame": 129
+    },
+    {
+      "frame": 44,
+      "time_sec": 4.4,
+      "source_frame": 132
+    },
+    {
+      "frame": 45,
+      "time_sec": 4.5,
+      "source_frame": 135
+    },
+    {
+      "frame": 46,
+      "time_sec": 4.6,
+      "source_frame": 138
+    },
+    {
+      "frame": 47,
+      "time_sec": 4.7,
+      "source_frame": 141
+    },
+    {
+      "frame": 48,
+      "time_sec": 4.8,
+      "source_frame": 144
+    },
+    {
+      "frame": 49,
+      "time_sec": 4.9,
+      "source_frame": 147
+    },
+    {
+      "frame": 50,
+      "time_sec": 5.0,
+      "source_frame": 150
+    },
+    {
+      "frame": 51,
+      "time_sec": 5.1,
+      "source_frame": 153
+    },
+    {
+      "frame": 52,
+      "time_sec": 5.2,
+      "source_frame": 156
+    },
+    {
+      "frame": 53,
+      "time_sec": 5.3,
+      "source_frame": 159
+    },
+    {
+      "frame": 54,
+      "time_sec": 5.4,
+      "source_frame": 162
+    },
+    {
+      "frame": 55,
+      "time_sec": 5.5,
+      "source_frame": 165
+    },
+    {
+      "frame": 56,
+      "time_sec": 5.6,
+      "source_frame": 168
+    },
+    {
+      "frame": 57,
+      "time_sec": 5.7,
+      "source_frame": 171
+    },
+    {
+      "frame": 58,
+      "time_sec": 5.8,
+      "source_frame": 174
+    },
+    {
+      "frame": 59,
+      "time_sec": 5.9,
+      "source_frame": 177
+    },
+    {
+      "frame": 60,
+      "time_sec": 6.0,
+      "source_frame": 180
+    },
+    {
+      "frame": 61,
+      "time_sec": 6.1,
+      "source_frame": 183
+    },
+    {
+      "frame": 62,
+      "time_sec": 6.2,
+      "source_frame": 186
+    },
+    {
+      "frame": 63,
+      "time_sec": 6.3,
+      "source_frame": 189
+    },
+    {
+      "frame": 64,
+      "time_sec": 6.4,
+      "source_frame": 192
+    },
+    {
+      "frame": 65,
+      "time_sec": 6.5,
+      "source_frame": 195
+    },
+    {
+      "frame": 66,
+      "time_sec": 6.6,
+      "source_frame": 198
+    },
+    {
+      "frame": 67,
+      "time_sec": 6.7,
+      "source_frame": 201
+    },
+    {
+      "frame": 68,
+      "time_sec": 6.8,
+      "source_frame": 204
+    },
+    {
+      "frame": 69,
+      "time_sec": 6.9,
+      "source_frame": 207
+    },
+    {
+      "frame": 70,
+      "time_sec": 7.0,
+      "source_frame": 210
+    },
+    {
+      "frame": 71,
+      "time_sec": 7.1,
+      "source_frame": 213
+    },
+    {
+      "frame": 72,
+      "time_sec": 7.2,
+      "source_frame": 216
+    },
+    {
+      "frame": 73,
+      "time_sec": 7.3,
+      "source_frame": 219
+    },
+    {
+      "frame": 74,
+      "time_sec": 7.4,
+      "source_frame": 222
+    },
+    {
+      "frame": 75,
+      "time_sec": 7.5,
+      "source_frame": 225
+    },
+    {
+      "frame": 76,
+      "time_sec": 7.6,
+      "source_frame": 228
+    },
+    {
+      "frame": 77,
+      "time_sec": 7.7,
+      "source_frame": 231
+    },
+    {
+      "frame": 78,
+      "time_sec": 7.8,
+      "source_frame": 234
+    },
+    {
+      "frame": 79,
+      "time_sec": 7.9,
+      "source_frame": 237
+    },
+    {
+      "frame": 80,
+      "time_sec": 8.0,
+      "source_frame": 240
+    },
+    {
+      "frame": 81,
+      "time_sec": 8.1,
+      "source_frame": 243
+    },
+    {
+      "frame": 82,
+      "time_sec": 8.2,
+      "source_frame": 246
+    },
+    {
+      "frame": 83,
+      "time_sec": 8.3,
+      "source_frame": 249
+    },
+    {
+      "frame": 84,
+      "time_sec": 8.4,
+      "source_frame": 252
+    },
+    {
+      "frame": 85,
+      "time_sec": 8.5,
+      "source_frame": 255
+    },
+    {
+      "frame": 86,
+      "time_sec": 8.6,
+      "source_frame": 258
+    },
+    {
+      "frame": 87,
+      "time_sec": 8.7,
+      "source_frame": 261
+    },
+    {
+      "frame": 88,
+      "time_sec": 8.8,
+      "source_frame": 264
+    },
+    {
+      "frame": 89,
+      "time_sec": 8.9,
+      "source_frame": 267
+    },
+    {
+      "frame": 90,
+      "time_sec": 9.0,
+      "source_frame": 270
+    },
+    {
+      "frame": 91,
+      "time_sec": 9.1,
+      "source_frame": 273
+    },
+    {
+      "frame": 92,
+      "time_sec": 9.2,
+      "source_frame": 276
+    },
+    {
+      "frame": 93,
+      "time_sec": 9.3,
+      "source_frame": 279
+    },
+    {
+      "frame": 94,
+      "time_sec": 9.4,
+      "source_frame": 282
+    },
+    {
+      "frame": 95,
+      "time_sec": 9.5,
+      "source_frame": 285
+    },
+    {
+      "frame": 96,
+      "time_sec": 9.6,
+      "source_frame": 288
+    },
+    {
+      "frame": 97,
+      "time_sec": 9.7,
+      "source_frame": 291
+    },
+    {
+      "frame": 98,
+      "time_sec": 9.8,
+      "source_frame": 294
+    },
+    {
+      "frame": 99,
+      "time_sec": 9.9,
+      "source_frame": 297
+    }
+  ],
+  "prompt_frames": [
+    "outputs/prompt_frames/prompt_frame_00000.jpg",
+    "outputs/prompt_frames/prompt_frame_00025.jpg",
+    "outputs/prompt_frames/prompt_frame_00050.jpg",
+    "outputs/prompt_frames/prompt_frame_00075.jpg",
+    "outputs/prompt_frames/prompt_frame_00099.jpg"
+  ],
+  "preview_video": "outputs/lacrosse_10s_10fps_preview.mp4"
+}
