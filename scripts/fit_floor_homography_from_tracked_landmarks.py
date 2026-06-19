@@ -8,7 +8,13 @@ import cv2
 import numpy as np
 from scipy.spatial import cKDTree
 
-from fit_floor_homography_from_feature_clicks import feature_residual, feature_samples, refine_frame
+from fit_floor_homography_from_feature_clicks import (
+    feature_residual,
+    feature_samples,
+    h_to_params,
+    params_to_h,
+    refine_frame,
+)
 from render_birds_eye_locations import (
     CORNER_RADIUS_FT,
     FLOOR_LENGTH_FT,
@@ -217,6 +223,9 @@ def fit_line_primitive(mask: np.ndarray, max_points: int, seed: int) -> dict | N
         "type": "line",
         "line": [float(a), float(b), float(c)],
         "points": int(len(points)),
+        "tree": cKDTree(points),
+        "samples": points,
+        "point_weight": 0.45,
         "mean_fit_error_px": float(np.mean(distances)),
         "max_fit_error_px": float(np.max(distances)),
     }
@@ -331,6 +340,101 @@ def fit_mask_point_primitive(mask: np.ndarray, max_points: int, seed: int) -> di
     }
 
 
+def yellow_pixels(frame_bgr: np.ndarray) -> np.ndarray:
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    return (hsv[:, :, 0] >= 18) & (hsv[:, :, 0] <= 42) & (hsv[:, :, 1] >= 55) & (hsv[:, :, 2] >= 90)
+
+
+def outline_envelope_points(mask: np.ndarray, frame_bgr: np.ndarray, max_points: int) -> np.ndarray:
+    filtered = mask & yellow_pixels(frame_bgr)
+    if not filtered.any():
+        filtered = mask
+    ys, xs = np.where(filtered)
+    if len(xs) == 0:
+        return np.zeros((0, 2), dtype=np.float64)
+
+    # Keep the lower envelope of the yellow boundary band. This rejects most
+    # board/ad-panel fill while preserving the actual floor boundary curve.
+    bins = np.linspace(float(xs.min()), float(xs.max()) + 1.0, max(12, min(120, int((xs.max() - xs.min()) / 8) + 1)))
+    points = []
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        keep = (xs >= lo) & (xs < hi)
+        if keep.sum() < 3:
+            continue
+        x_bin = xs[keep]
+        y_bin = ys[keep]
+        y_cut = np.percentile(y_bin, 88)
+        lower = y_bin >= y_cut
+        if lower.any():
+            points.append([float(np.median(x_bin[lower])), float(np.median(y_bin[lower]))])
+    if not points:
+        return sample_mask_pixels(filtered, max_points, seed=17)
+    points_arr = np.asarray(points, dtype=np.float64)
+    if len(points_arr) <= max_points:
+        return points_arr
+    idx = np.linspace(0, len(points_arr) - 1, max_points).round().astype(int)
+    return points_arr[idx]
+
+
+def fit_outline_primitive(mask: np.ndarray, frame_bgr: np.ndarray, max_points: int) -> dict | None:
+    points = outline_envelope_points(mask, frame_bgr, max_points)
+    if len(points) < 8:
+        return None
+    return {
+        "type": "mask_points",
+        "points": int(len(points)),
+        "tree": cKDTree(points),
+        "samples": points,
+    }
+
+
+def choose_visible_outline_samples(
+    outline_points: np.ndarray,
+    initial_H_image_to_world: np.ndarray,
+    samples_by_feature: dict[str, np.ndarray],
+    max_distance_px: float = 140.0,
+) -> np.ndarray:
+    H_world_to_image = np.linalg.inv(initial_H_image_to_world)
+    world_samples = samples_by_feature["field_outline"]
+    projected = project_world(H_world_to_image, world_samples)
+    valid = np.isfinite(projected).all(axis=1)
+    if not valid.any():
+        return world_samples
+    tree = cKDTree(outline_points)
+    distances, _ = tree.query(projected[valid], k=1)
+    valid_indices = np.nonzero(valid)[0]
+    keep = valid_indices[distances <= max_distance_px]
+    if len(keep) >= 20:
+        return world_samples[keep]
+    order = np.argsort(distances)
+    closest = valid_indices[order[: min(80, len(order))]]
+    return world_samples[closest] if len(closest) >= 8 else world_samples
+
+
+def choose_visible_feature_samples(
+    mask_points: np.ndarray,
+    feature: str,
+    initial_H_image_to_world: np.ndarray,
+    samples_by_feature: dict[str, np.ndarray],
+    max_distance_px: float = 90.0,
+) -> np.ndarray:
+    H_world_to_image = np.linalg.inv(initial_H_image_to_world)
+    world_samples = samples_by_feature[feature]
+    projected = project_world(H_world_to_image, world_samples)
+    valid = np.isfinite(projected).all(axis=1)
+    if not valid.any():
+        return world_samples
+    tree = cKDTree(mask_points)
+    distances, _ = tree.query(projected[valid], k=1)
+    valid_indices = np.nonzero(valid)[0]
+    keep = valid_indices[distances <= max_distance_px]
+    if len(keep) >= 10:
+        return world_samples[keep]
+    order = np.argsort(distances)
+    closest = valid_indices[order[: min(50, len(order))]]
+    return world_samples[closest] if len(closest) >= 4 else world_samples
+
+
 def choose_crease_side(mask_points: np.ndarray, initial_H_image_to_world: np.ndarray) -> tuple[str, np.ndarray]:
     H_world_to_image = np.linalg.inv(initial_H_image_to_world)
     tree = cKDTree(mask_points)
@@ -357,7 +461,9 @@ def primitive_from_mask_source(
     object_id: int | None,
     frame_idx: int,
     frame_shape: tuple[int, int],
+    frame_bgr: np.ndarray,
     initial_H_image_to_world: np.ndarray,
+    samples_by_feature: dict[str, np.ndarray],
     max_points_per_source: int,
     min_component_area: int,
 ) -> dict | None:
@@ -366,12 +472,18 @@ def primitive_from_mask_source(
         return None
     if feature in {"left_restraining_line", "right_restraining_line", "midfield_line"}:
         primitive = fit_line_primitive(mask, max_points_per_source, seed=frame_idx * 1009 + len(feature))
+        if primitive is not None:
+            primitive["world_samples"] = choose_visible_feature_samples(primitive["samples"], feature, initial_H_image_to_world, samples_by_feature)
     elif feature == "goal_crease":
         primitive = fit_mask_point_primitive(mask, max_points_per_source, seed=frame_idx * 1009 + len(feature))
         if primitive is not None:
             side, world_samples = choose_crease_side(primitive["samples"], initial_H_image_to_world)
             primitive["world_samples"] = world_samples
             primitive["crease_side"] = side
+    elif feature == "field_outline":
+        primitive = fit_outline_primitive(mask, frame_bgr, max_points_per_source)
+        if primitive is not None:
+            primitive["world_samples"] = choose_visible_outline_samples(primitive["samples"], initial_H_image_to_world, samples_by_feature)
     else:
         primitive = fit_mask_point_primitive(mask, max_points_per_source, seed=frame_idx * 1009 + len(feature))
     if primitive is None:
@@ -406,6 +518,14 @@ def primitive_residuals(
             residuals.extend(d.tolist())
             errors.extend(np.abs(d).tolist())
             feature_counts[feature] = feature_counts.get(feature, 0) + len(d)
+            if "tree" in primitive and "samples" in primitive:
+                distances, nearest = primitive["tree"].query(projected, k=1)
+                nearest_points = primitive["samples"][nearest]
+                weight = float(primitive.get("point_weight", 0.45))
+                diff = (projected - nearest_points) * weight
+                residuals.extend(diff.reshape(-1).tolist())
+                errors.extend((distances * weight).tolist())
+                feature_counts[feature] = feature_counts.get(feature, 0) + len(distances)
         else:
             distances, nearest = primitive["tree"].query(projected, k=1)
             nearest_points = primitive["samples"][nearest]
@@ -496,6 +616,85 @@ def refine_frame_primitive_image_similarity(
     return H_image_to_world, metrics
 
 
+def refine_frame_primitive_full_homography(
+    frame: int,
+    primitives: list[dict],
+    initial_H_image_to_world: np.ndarray,
+    samples_by_feature: dict[str, np.ndarray],
+    max_nfev: int,
+    regularization: float,
+    sample_stride: int,
+) -> tuple[np.ndarray, dict]:
+    from scipy.optimize import least_squares
+
+    initial_H_world_to_image = np.linalg.inv(initial_H_image_to_world)
+    p0 = h_to_params(initial_H_world_to_image)
+    all_samples = np.concatenate(list(samples_by_feature.values()), axis=0)
+    regularizer_samples = all_samples[:: max(1, len(all_samples) // 360)]
+    initial_projected = project_world(initial_H_world_to_image, regularizer_samples)
+
+    def residual_fn(params: np.ndarray) -> np.ndarray:
+        H_world_to_image = params_to_h(params)
+        residuals, _, _ = primitive_residuals(H_world_to_image, primitives, samples_by_feature, sample_stride)
+        if regularization > 0:
+            projected = project_world(H_world_to_image, regularizer_samples)
+            valid = np.isfinite(projected).all(axis=1) & np.isfinite(initial_projected).all(axis=1)
+            if valid.any():
+                residuals.extend(((projected[valid] - initial_projected[valid]) * regularization).reshape(-1).tolist())
+        return np.asarray(residuals, dtype=np.float64)
+
+    result = least_squares(
+        residual_fn,
+        p0,
+        loss="soft_l1",
+        f_scale=14.0,
+        max_nfev=max_nfev,
+        xtol=1e-9,
+        ftol=1e-9,
+        gtol=1e-9,
+    )
+    H_world_to_image = params_to_h(result.x)
+    H_image_to_world = np.linalg.inv(H_world_to_image)
+    _, errors, feature_counts = primitive_residuals(H_world_to_image, primitives, samples_by_feature, sample_stride)
+
+    pitch_corners = np.asarray(
+        [
+            [0.0, 0.0],
+            [FLOOR_LENGTH_FT, 0.0],
+            [FLOOR_LENGTH_FT, FLOOR_WIDTH_FT],
+            [0.0, FLOOR_WIDTH_FT],
+        ],
+        dtype=np.float64,
+    )
+    before = project_world(initial_H_world_to_image, pitch_corners)
+    after = project_world(H_world_to_image, pitch_corners)
+    valid_corners = np.isfinite(before).all(axis=1) & np.isfinite(after).all(axis=1)
+    corner_shift = np.linalg.norm(after[valid_corners] - before[valid_corners], axis=1) if valid_corners.any() else np.asarray([])
+
+    metrics = {
+        "success": bool(result.success),
+        "cost": float(result.cost),
+        "mean_error_px": float(np.mean(errors)) if errors else 0.0,
+        "max_error_px": float(np.max(errors)) if errors else 0.0,
+        "nfev": int(result.nfev),
+        "features": feature_counts,
+        "primitives": [
+            {
+                "feature": item["feature"],
+                "type": item["type"],
+                "points": int(item["points"]),
+                "mean_fit_error_px": item.get("mean_fit_error_px"),
+            }
+            for item in primitives
+        ],
+        "full_homography_adjustment": {
+            "mean_corner_shift_px": float(np.mean(corner_shift)) if len(corner_shift) else 0.0,
+            "max_corner_shift_px": float(np.max(corner_shift)) if len(corner_shift) else 0.0,
+        },
+    }
+    return H_image_to_world, metrics
+
+
 def build_feature_trees(
     H_image_to_world: np.ndarray,
     samples_by_feature: dict[str, np.ndarray],
@@ -575,7 +774,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-component-area", type=int, default=18)
     parser.add_argument("--min-points", type=int, default=18)
     parser.add_argument("--min-features", type=int, default=2)
-    parser.add_argument("--refine-mode", choices=["full_homography", "image_similarity", "primitive_image_similarity"], default="full_homography")
+    parser.add_argument(
+        "--refine-mode",
+        choices=["full_homography", "image_similarity", "primitive_image_similarity", "primitive_full_homography"],
+        default="full_homography",
+    )
     parser.add_argument("--primitive-sample-stride", type=int, default=5)
     parser.add_argument("--max-single-line-rotation-deg", type=float, default=18.0)
     parser.add_argument("--max-single-line-translation-px", type=float, default=120.0)
@@ -610,7 +813,7 @@ def main() -> None:
             continue
         initial_fit = nearest_fit(initial_fits, frame_idx)
         frame_shape = frame.shape[:2]
-        if args.refine_mode == "primitive_image_similarity":
+        if args.refine_mode in {"primitive_image_similarity", "primitive_full_homography"}:
             primitives = []
             source_counts = {}
             for feature, mask_dir, object_id in args.mask_source:
@@ -622,7 +825,9 @@ def main() -> None:
                     object_id,
                     frame_idx,
                     frame_shape,
+                    frame,
                     initial_fit.H,
+                    samples_by_feature,
                     args.max_points_per_source,
                     args.min_component_area,
                 )
@@ -691,15 +896,26 @@ def main() -> None:
                 )
                 continue
             else:
-                H, metrics = refine_frame_primitive_image_similarity(
-                    frame_idx,
-                    primitives,
-                    initial_fit.H,
-                    samples_by_feature,
-                    max_nfev=args.max_nfev,
-                    regularization=args.regularization,
-                    sample_stride=max(1, args.primitive_sample_stride),
-                )
+                if args.refine_mode == "primitive_full_homography":
+                    H, metrics = refine_frame_primitive_full_homography(
+                        frame_idx,
+                        primitives,
+                        initial_fit.H,
+                        samples_by_feature,
+                        max_nfev=args.max_nfev,
+                        regularization=args.regularization,
+                        sample_stride=max(1, args.primitive_sample_stride),
+                    )
+                else:
+                    H, metrics = refine_frame_primitive_image_similarity(
+                        frame_idx,
+                        primitives,
+                        initial_fit.H,
+                        samples_by_feature,
+                        max_nfev=args.max_nfev,
+                        regularization=args.regularization,
+                        sample_stride=max(1, args.primitive_sample_stride),
+                    )
             if not homography_projection_ok(H, samples_by_feature):
                 homographies.append(
                     {
