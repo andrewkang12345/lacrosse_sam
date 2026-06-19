@@ -5,6 +5,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
 import torch
 from transformers import Sam2VideoModel, Sam2VideoProcessor
 
@@ -18,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="facebook/sam2.1-hiera-large")
     parser.add_argument("--output", default="outputs/sam2_click_tracks.mp4")
     parser.add_argument("--mask-dir", default=None)
+    parser.add_argument("--instance-mask-dir", default=None)
     parser.add_argument("--fps", type=float, default=10.0)
     return parser.parse_args()
 
@@ -81,6 +83,11 @@ def main() -> None:
         mask_dir.mkdir(parents=True, exist_ok=True)
         for path in mask_dir.glob("*.png"):
             path.unlink()
+    instance_mask_dir = Path(args.instance_mask_dir) if args.instance_mask_dir else None
+    if instance_mask_dir:
+        instance_mask_dir.mkdir(parents=True, exist_ok=True)
+        for path in instance_mask_dir.glob("*.npz"):
+            path.unlink()
     metadata = {
         "model": args.model,
         "fps": args.fps,
@@ -100,24 +107,34 @@ def main() -> None:
                 for i, obj_id in enumerate(inference_session.obj_ids)
                 if i < video_res_masks.shape[0]
             }
+            obj_ids = [int(obj_id) for obj_id in masks_by_id]
+            mask_arrays = [
+                np.squeeze(masks_by_id[obj_id].detach().float().cpu().numpy())
+                for obj_id in obj_ids
+            ]
             if mask_dir:
-                import numpy as np
                 from PIL import Image
 
-                obj_ids = [int(obj_id) for obj_id in masks_by_id]
-                logits = np.stack(
-                    [
-                        np.squeeze(masks_by_id[obj_id].detach().float().cpu().numpy())
-                        for obj_id in obj_ids
-                    ],
-                    axis=0,
-                )
-                best = logits.argmax(axis=0)
-                score = logits.max(axis=0)
-                label_mask = np.zeros(score.shape, dtype=np.uint8)
-                for i, obj_id in enumerate(obj_ids):
-                    label_mask[(best == i) & (score > 0)] = min(int(obj_id), 255)
+                if mask_arrays:
+                    logits = np.stack(mask_arrays, axis=0)
+                    best = logits.argmax(axis=0)
+                    score = logits.max(axis=0)
+                    label_mask = np.zeros(score.shape, dtype=np.uint8)
+                    for i, obj_id in enumerate(obj_ids):
+                        label_mask[(best == i) & (score > 0)] = min(int(obj_id), 255)
+                else:
+                    label_mask = np.zeros((inference_session.video_height, inference_session.video_width), dtype=np.uint8)
                 Image.fromarray(label_mask, mode="P").save(mask_dir / f"{output.frame_idx:08d}.png")
+            if instance_mask_dir:
+                if mask_arrays:
+                    stack = np.stack(mask_arrays, axis=0) > 0
+                else:
+                    stack = np.zeros((0, inference_session.video_height, inference_session.video_width), dtype=bool)
+                np.savez_compressed(
+                    instance_mask_dir / f"{output.frame_idx:08d}.npz",
+                    object_ids=np.asarray(obj_ids, dtype=np.int32),
+                    masks=stack.astype(np.uint8),
+                )
             rendered_frames.append(overlay_masks(frames[output.frame_idx], masks_by_id))
             metadata["frames"].append(
                 {

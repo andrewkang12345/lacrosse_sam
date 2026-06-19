@@ -423,6 +423,54 @@ python scripts/render_birds_eye_locations.py \
   --fps 10
 ```
 
+To use SAM2 to segment and track the clicked floor landmarks, convert the coarse feature clicks into one SAM2 object per landmark class, propagate those masks, and refit the dynamic homographies from the tracked mask pixels:
+
+```bash
+python scripts/floor_feature_clicks_to_sam2_prompts.py \
+  --feature-clicks outputs/floor_feature_clicks_no_outline.json \
+  --output outputs/floor_feature_sam2_prompts_no_outline.json
+
+python scripts/track_sam2_clicks.py \
+  --frames-dir data/frames_10fps \
+  --prompts outputs/floor_feature_sam2_prompts_no_outline.json \
+  --model facebook/sam2.1-hiera-large \
+  --output outputs/sam2_floor_feature_tracks_no_outline_h264.mp4 \
+  --mask-dir outputs/sam2_floor_feature_label_masks_no_outline \
+  --instance-mask-dir outputs/sam2_floor_feature_instance_masks_no_outline \
+  --fps 10
+
+python scripts/fit_floor_homography_from_tracked_landmarks.py \
+  --frames-dir data/frames_10fps \
+  --initial-calibration outputs/floor_homography_feature_no_outline_dynamic.json \
+  --feature-clicks outputs/floor_feature_clicks_no_outline.json \
+  --output outputs/floor_homography_sam2_landmarks_no_outline_dynamic.json \
+  --mask-source 'left_restraining_line=outputs/sam2_floor_feature_instance_masks_no_outline#1' \
+  --mask-source 'right_restraining_line=outputs/sam2_floor_feature_instance_masks_no_outline#2' \
+  --mask-source 'midfield_line=outputs/sam2_floor_feature_instance_masks_no_outline#3' \
+  --mask-source 'goal_crease=outputs/sam2_floor_feature_instance_masks_no_outline#4' \
+  --exclude-features field_outline \
+  --min-features 1
+
+python scripts/render_camera_homography_overlay.py \
+  --calibration outputs/floor_homography_sam2_landmarks_no_outline_dynamic.json \
+  --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --frames-dir data/frames_10fps \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --output-video outputs/camera_floor_homography_overlay_sam2_landmarks_no_outline_h264.mp4 \
+  --fps 10
+
+python scripts/render_birds_eye_locations.py \
+  --calibration outputs/floor_homography_sam2_landmarks_no_outline_dynamic.json \
+  --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --frames-dir data/frames_10fps \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --output-video outputs/birds_eye_player_locations_sam2_landmarks_no_outline_h264.mp4 \
+  --output-json outputs/birds_eye_player_locations_sam2_landmarks_no_outline.json \
+  --fps 10
+```
+
+The current no-outline SAM2 landmark pass refines 82 of 100 frames from tracked landmark masks and falls back to the prior dynamic calibration on the remaining frames.
+
 ## Output Video Format
 
 All rendered tracking videos are written with `libx264` via `imageio-ffmpeg`:
@@ -438,14 +486,16 @@ This makes the MP4 files viewable in VS Code.
 
 - `scripts/prepare_lacrosse_clip.py`: samples the source video, writes frames, preview video, and prompt images.
 - `scripts/click_annotator.py`: local web UI for collecting full-resolution player clicks.
-- `scripts/track_sam2_clicks.py`: runs SAM2 video tracking from click prompts.
+- `scripts/track_sam2_clicks.py`: runs SAM2 video tracking from click prompts and can export per-object mask stacks.
 - `scripts/track_sam3_text.py`: runs SAM3 video tracking from a text prompt.
 - `scripts/classify_sam3_teams_by_torso_color.py`: assigns team colors from masked torso color composition and smooths labels by SAM3 object ID.
 - `scripts/classify_sam3_teams_by_transreid.py`: assigns team/goalkeeper clusters from TransReID embeddings and smooths labels by SAM3 object ID.
 - `scripts/floor_homography_annotator.py`: local web UI for clicking floor landmarks with known world coordinates.
 - `scripts/floor_free_click_annotator.py`: local web UI for unlabeled floor landmark clicks.
 - `scripts/floor_feature_annotator.py`: local web UI for coarse floor-feature clicks.
+- `scripts/floor_feature_clicks_to_sam2_prompts.py`: converts coarse floor-feature clicks into SAM2 object prompts.
 - `scripts/fit_floor_homography_from_feature_clicks.py`: fits homography from coarse feature-labeled clicks, including the semicircle-plus-rectangle crease model.
+- `scripts/fit_floor_homography_from_tracked_landmarks.py`: refines per-frame homographies from SAM2/SAM-style tracked landmark masks.
 - `scripts/estimate_dynamic_floor_homographies.py`: estimates per-frame camera motion and writes one floor homography per frame.
 - `scripts/refine_floor_homography_from_unlabeled_clicks.py`: refines a homography by treating free clicks as points on modeled floor features.
 - `scripts/render_camera_homography_overlay.py`: projects the fitted floor model and player floor-contact points back onto the camera video for calibration debugging.
