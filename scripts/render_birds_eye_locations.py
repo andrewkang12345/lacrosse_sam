@@ -98,6 +98,22 @@ def floor_point_from_detection(
 
 
 def fit_homographies(calibration: dict, ransac_threshold_ft: float) -> list[HomographyFit]:
+    if calibration.get("schema") == "floor_homography_matrix_v1":
+        fits = []
+        for item in calibration.get("homographies", []):
+            fits.append(
+                HomographyFit(
+                    frame=int(item["frame"]),
+                    H=np.asarray(item["matrix_image_to_world"], dtype=np.float64),
+                    points=int(item.get("points", 0)),
+                    inliers=int(item.get("inliers", item.get("points", 0))),
+                    mean_error_ft=float(item.get("mean_error_ft", item.get("mean_error_px", 0.0))),
+                )
+            )
+        if not fits:
+            raise RuntimeError("No homography matrices found in calibration.")
+        return fits
+
     if calibration.get("schema") == "floor_unlabeled_clicks_v1" or (
         calibration.get("clicks") and "world" not in calibration["clicks"][0]
     ):
