@@ -310,6 +310,45 @@ outputs/sam_body4d_transreid_3clusters_overlay_h264.mp4
 outputs/4d_humans_transreid_3clusters_overlay_h264.mp4
 ```
 
+## 9. Bird's-Eye Player Locations
+
+Calibrate image pixels to floor coordinates with clicked floor landmarks. The world coordinate system is x = 0..200 ft along the floor length and y = 0..85 ft across the floor width.
+
+Start the free-click landmark UI:
+
+```bash
+python scripts/floor_free_click_annotator.py \
+  --manifest outputs/prompt_frames/manifest.json \
+  --frames-dir data/frames_10fps \
+  --output outputs/floor_unlabeled_clicks.json \
+  --host 0.0.0.0 \
+  --port 8770
+```
+
+Open:
+
+```text
+http://127.0.0.1:8770
+```
+
+Click any visible floor landmarks. You do not need to label which landmark is which. Use 8 or more points per calibrated frame if possible. Good points are white-line intersections, center/face-off dots, crease extrema, goal posts, and yellow boundary tangencies. If the camera pans or zooms, click landmarks on multiple frames.
+
+Render the top-down floor map from the three-cluster SAM3/TransReID JSON:
+
+```bash
+python scripts/render_birds_eye_locations.py \
+  --calibration outputs/floor_unlabeled_clicks.json \
+  --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --frames-dir data/frames_10fps \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --output-video outputs/birds_eye_player_locations_h264.mp4 \
+  --output-json outputs/birds_eye_player_locations.json \
+  --auto-fit-iterations 40000 \
+  --fps 10
+```
+
+The renderer auto-matches the unlabeled clicks to the known NLL floor line/landmark model, uses each player's SAM3 mask bottom point, falls back to the detection box bottom-center, maps it through the nearest calibrated homography, and draws colored team dots on a 200 ft x 85 ft NLL floor diagram.
+
 ## Output Video Format
 
 All rendered tracking videos are written with `libx264` via `imageio-ffmpeg`:
@@ -329,6 +368,9 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/track_sam3_text.py`: runs SAM3 video tracking from a text prompt.
 - `scripts/classify_sam3_teams_by_torso_color.py`: assigns team colors from masked torso color composition and smooths labels by SAM3 object ID.
 - `scripts/classify_sam3_teams_by_transreid.py`: assigns team/goalkeeper clusters from TransReID embeddings and smooths labels by SAM3 object ID.
+- `scripts/floor_homography_annotator.py`: local web UI for clicking floor landmarks with known world coordinates.
+- `scripts/floor_free_click_annotator.py`: local web UI for unlabeled floor landmark clicks.
+- `scripts/render_birds_eye_locations.py`: projects SAM3 player floor points through homography and writes a top-down player-location MP4.
 - `scripts/merge_sam3_team_detections.py`: optional older path that merges black/white SAM3 prompt detections and assigns team colors using mask-average color for ties.
 - `scripts/run_sam_body4d_from_masks.py`: runs SAM-Body4D from exported label masks.
 - `scripts/run_sam_body4d_from_sam3_boxes.py`: runs SAM-Body4D from SAM3 text detections, preserving multiple players.
