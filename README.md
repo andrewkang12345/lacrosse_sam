@@ -367,6 +367,16 @@ python scripts/fit_floor_homography_from_feature_clicks.py \
 ```
 
 The feature fitter models the goal crease as a front semicircle plus a rear rectangle at each goal, not as a pure circle.
+To fit without field-outline clicks:
+
+```bash
+python scripts/fit_floor_homography_from_feature_clicks.py \
+  --feature-clicks outputs/floor_feature_clicks.json \
+  --initial-calibration outputs/floor_homography_feature_dynamic.json \
+  --output outputs/floor_homography_feature_no_outline_fit.json \
+  --reference-frame 78 \
+  --exclude-features field_outline
+```
 
 For debugging and refinement, fit clicks as points on floor features and project the fitted floor model back onto the camera video:
 

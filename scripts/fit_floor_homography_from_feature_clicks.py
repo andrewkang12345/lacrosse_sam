@@ -175,6 +175,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-calibration", default="outputs/floor_homography_dynamic.json")
     parser.add_argument("--output", default="outputs/floor_homography_feature_fit.json")
     parser.add_argument("--reference-frame", type=int, default=78)
+    parser.add_argument("--exclude-features", default="", help="Comma-separated feature IDs to ignore, e.g. field_outline")
     parser.add_argument("--max-nfev", type=int, default=5000)
     parser.add_argument("--regularization", type=float, default=0.012)
     parser.add_argument("--ransac-threshold-ft", type=float, default=3.0)
@@ -187,9 +188,10 @@ def main() -> None:
     initial_data = json.loads(Path(args.initial_calibration).read_text())
     initial_fits = fit_homographies(initial_data, args.ransac_threshold_ft)
     samples_by_feature = feature_samples()
+    excluded_features = {item.strip() for item in args.exclude_features.split(",") if item.strip()}
 
     by_frame: dict[int, list[dict]] = {}
-    valid_features = set(samples_by_feature)
+    valid_features = set(samples_by_feature) - excluded_features
     for click in feature_data.get("clicks", []):
         if click.get("feature") not in valid_features:
             continue
@@ -236,6 +238,7 @@ def main() -> None:
         "source_initial_calibration": args.initial_calibration,
         "fit_method": "coarse_feature_distance_refinement",
         "crease_model": "front semicircle plus rear rectangle, mirrored at both goals",
+        "excluded_features": sorted(excluded_features),
         "reference_frame": args.reference_frame,
         "homographies": homographies,
     }
