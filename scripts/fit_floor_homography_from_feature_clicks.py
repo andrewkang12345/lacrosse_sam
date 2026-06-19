@@ -43,23 +43,9 @@ def rounded_outline_samples(samples_per_segment: int = 140) -> np.ndarray:
 
 def crease_samples() -> np.ndarray:
     radius = 9.25
-    lower = 42.5 - radius
-    upper = 42.5 + radius
-    left = [
-        arc_points(12.0, 42.5, radius, -90.0, 90.0, 140),
-        line_points(0.0, lower, 12.0, lower, 60),
-        line_points(0.0, upper, 12.0, upper, 60),
-        line_points(0.0, lower, 0.0, upper, 80),
-        line_points(12.0, lower, 12.0, upper, 50),
-    ]
-    right = [
-        arc_points(188.0, 42.5, radius, 90.0, 270.0, 140),
-        line_points(188.0, lower, 200.0, lower, 60),
-        line_points(188.0, upper, 200.0, upper, 60),
-        line_points(200.0, lower, 200.0, upper, 80),
-        line_points(188.0, lower, 188.0, upper, 50),
-    ]
-    return np.concatenate(left + right, axis=0).astype(np.float64)
+    left = arc_points(12.0, 42.5, radius, -90.0, 90.0, 160)
+    right = arc_points(188.0, 42.5, radius, 90.0, 270.0, 160)
+    return np.concatenate([left, right], axis=0).astype(np.float64)
 
 
 def feature_samples() -> dict[str, np.ndarray]:
@@ -237,7 +223,7 @@ def main() -> None:
         "source_feature_clicks": args.feature_clicks,
         "source_initial_calibration": args.initial_calibration,
         "fit_method": "coarse_feature_distance_refinement",
-        "crease_model": "front semicircle plus rear rectangle, mirrored at both goals",
+        "crease_model": "visible circular arc segment, mirrored at both goals",
         "excluded_features": sorted(excluded_features),
         "reference_frame": args.reference_frame,
         "homographies": homographies,

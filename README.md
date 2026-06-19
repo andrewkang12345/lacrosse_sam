@@ -366,7 +366,7 @@ python scripts/fit_floor_homography_from_feature_clicks.py \
   --reference-frame 78
 ```
 
-The feature fitter models the goal crease as a front semicircle plus a rear rectangle at each goal, not as a pure circle.
+The feature fitter models each goal crease as the visible circular arc segment, not as a full circle or rectangle.
 To fit without field-outline clicks:
 
 ```bash
@@ -443,36 +443,39 @@ python scripts/fit_floor_homography_from_tracked_landmarks.py \
   --frames-dir data/frames_10fps \
   --initial-calibration outputs/floor_homography_feature_no_outline_dynamic.json \
   --feature-clicks outputs/floor_feature_clicks_no_outline.json \
-  --output outputs/floor_homography_sam2_landmarks_stable_no_outline_dynamic.json \
+  --output outputs/floor_homography_sam2_landmarks_primitive_no_outline_dynamic.json \
   --mask-source 'left_restraining_line=outputs/sam2_floor_feature_instance_masks_no_outline#1' \
   --mask-source 'right_restraining_line=outputs/sam2_floor_feature_instance_masks_no_outline#2' \
   --mask-source 'midfield_line=outputs/sam2_floor_feature_instance_masks_no_outline#3' \
   --mask-source 'goal_crease=outputs/sam2_floor_feature_instance_masks_no_outline#4' \
   --exclude-features field_outline \
-  --min-features 2
+  --refine-mode primitive_image_similarity \
+  --min-features 1 \
+  --max-single-line-rotation-deg 18 \
+  --max-single-line-translation-px 120
 
 python scripts/render_camera_homography_overlay.py \
-  --calibration outputs/floor_homography_sam2_landmarks_stable_no_outline_dynamic.json \
+  --calibration outputs/floor_homography_sam2_landmarks_primitive_no_outline_dynamic.json \
   --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
   --frames-dir data/frames_10fps \
   --instance-mask-dir outputs/sam3_text_player_instance_masks \
-  --output-video outputs/camera_floor_homography_overlay_sam2_landmarks_masks_fixed_no_outline_h264.mp4 \
+  --output-video outputs/camera_floor_homography_overlay_sam2_landmarks_primitive_no_outline_h264.mp4 \
   --draw-landmark-masks \
   --landmark-mask-alpha 0.45 \
   --fps 10
 
 python scripts/render_birds_eye_locations.py \
-  --calibration outputs/floor_homography_sam2_landmarks_stable_no_outline_dynamic.json \
+  --calibration outputs/floor_homography_sam2_landmarks_primitive_no_outline_dynamic.json \
   --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
   --frames-dir data/frames_10fps \
   --instance-mask-dir outputs/sam3_text_player_instance_masks \
-  --output-video outputs/birds_eye_player_locations_sam2_landmarks_masks_fixed_no_outline_h264.mp4 \
-  --output-json outputs/birds_eye_player_locations_sam2_landmarks_masks_fixed_no_outline.json \
+  --output-video outputs/birds_eye_player_locations_sam2_landmarks_primitive_masks_no_outline_h264.mp4 \
+  --output-json outputs/birds_eye_player_locations_sam2_landmarks_primitive_masks_no_outline.json \
   --draw-landmark-mask-points \
   --fps 10
 ```
 
-The stable no-outline SAM2 landmark pass refines 43 of 100 frames from tracked landmark masks and falls back to the prior dynamic calibration on the remaining frames. This is deliberate: a full homography is only updated when at least two landmark classes are visible, avoiding the bad pitch warping caused by fitting from one line. `--draw-landmark-masks` overlays the SAM2 camera-space floor landmark segmentations on the camera video; `--draw-landmark-mask-points` projects sampled SAM2 landmark-mask pixels onto the top-down floor view. The renderers draw each goal crease as the fitted front semicircle plus rear rectangle, not as a full circle.
+The primitive no-outline SAM2 landmark pass fits image-space line primitives directly from SAM2 masks and fits the visible crease as an arc segment, not as a full circle or rectangle. It refines 81 of 100 frames and falls back on 19 frames where a single-line correction would be too large or the projection would leave safe render bounds. `--draw-landmark-masks` overlays the SAM2 camera-space floor landmark segmentations on the camera video; `--draw-landmark-mask-points` projects sampled SAM2 landmark-mask pixels onto the top-down floor view.
 
 ## Output Video Format
 
@@ -497,7 +500,7 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/floor_free_click_annotator.py`: local web UI for unlabeled floor landmark clicks.
 - `scripts/floor_feature_annotator.py`: local web UI for coarse floor-feature clicks.
 - `scripts/floor_feature_clicks_to_sam2_prompts.py`: converts coarse floor-feature clicks into SAM2 object prompts.
-- `scripts/fit_floor_homography_from_feature_clicks.py`: fits homography from coarse feature-labeled clicks, including the semicircle-plus-rectangle crease model.
+- `scripts/fit_floor_homography_from_feature_clicks.py`: fits homography from coarse feature-labeled clicks, including the arc-segment crease model.
 - `scripts/fit_floor_homography_from_tracked_landmarks.py`: refines per-frame homographies from SAM2/SAM-style tracked landmark masks, with an optional image-similarity mode for constrained updates.
 - `scripts/estimate_dynamic_floor_homographies.py`: estimates per-frame camera motion and writes one floor homography per frame.
 - `scripts/refine_floor_homography_from_unlabeled_clicks.py`: refines a homography by treating free clicks as points on modeled floor features.

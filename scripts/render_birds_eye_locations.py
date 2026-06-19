@@ -437,18 +437,10 @@ def draw_world_arc(
 
 def draw_world_crease(img: np.ndarray, goal_x: float, color: tuple[int, int, int], thickness: int, margin: int) -> None:
     radius = 9.25
-    lower = 42.5 - radius
-    upper = 42.5 + radius
     if goal_x < FLOOR_LENGTH_FT / 2.0:
         draw_world_arc(img, (goal_x, 42.5), radius, -90.0, 90.0, color, thickness, margin)
-        draw_world_line(img, (0.0, lower), (goal_x, lower), color, thickness, margin)
-        draw_world_line(img, (0.0, upper), (goal_x, upper), color, thickness, margin)
-        draw_world_line(img, (0.0, lower), (0.0, upper), color, thickness, margin)
     else:
         draw_world_arc(img, (goal_x, 42.5), radius, 90.0, 270.0, color, thickness, margin)
-        draw_world_line(img, (goal_x, lower), (FLOOR_LENGTH_FT, lower), color, thickness, margin)
-        draw_world_line(img, (goal_x, upper), (FLOOR_LENGTH_FT, upper), color, thickness, margin)
-        draw_world_line(img, (FLOOR_LENGTH_FT, lower), (FLOOR_LENGTH_FT, upper), color, thickness, margin)
 
 
 def draw_floor(width: int, height: int, margin: int) -> np.ndarray:
