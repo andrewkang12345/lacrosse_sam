@@ -23,6 +23,19 @@ The workflow samples the first 10 seconds at 10 fps into:
 data/frames_10fps/frame_*.jpg
 ```
 
+## Outputs Layout
+
+Generated artifacts under `outputs/` are now grouped by workflow stage:
+
+- `outputs/clips/`, `outputs/prompts/`
+- `outputs/sam2/player_tracks/`, `outputs/sam2/floor_features/`
+- `outputs/sam3/text/`, `outputs/sam3/team_classification/`
+- `outputs/meshes/sam_body4d/`, `outputs/meshes/4d_humans/`
+- `outputs/floor/clicks/`, `outputs/floor/sam2_prompts/`, `outputs/floor/calibrations/`
+- `outputs/birds_eye/`, `outputs/overlays/camera/`, `outputs/debug/`, `outputs/vggt/`
+
+The older flat paths shown in historical command examples may need to be replaced with the corresponding grouped path.
+
 ## Setup
 
 Run from the repo root:
@@ -480,6 +493,36 @@ python scripts/render_birds_eye_locations.py \
 
 The primitive SAM2 landmark pass fits image-space line primitives and visible line segments directly from SAM2 masks, filters the outline mask to the yellow lower rink envelope, and fits the visible crease as an arc segment. `primitive_full_homography` refines the full projective transform when multiple primitives are visible; frames with only one line use a bounded line-specific correction. `--draw-landmark-masks` overlays the SAM2 camera-space floor landmark segmentations on the camera video; `--draw-landmark-mask-points` projects sampled SAM2 landmark-mask pixels onto the top-down floor view.
 
+## 10. VGGT Bird's-Eye Coordinates
+
+The VGGT path estimates camera intrinsics/extrinsics/depth from the clip, unprojects SAM2 floor-landmark masks and SAM3 player masks into VGGT's 3D world, fits a floor plane, aligns that plane to the 200 ft x 85 ft rink model, and renders player dots from VGGT-derived floor-contact points:
+
+```bash
+git clone https://github.com/facebookresearch/vggt third_party/VGGT
+python -m pip install -r third_party/VGGT/requirements.txt
+
+python scripts/run_vggt_birds_eye.py \
+  --vggt-repo third_party/VGGT \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3/team_classification/sam3_team_transreid_3clusters_detections.json \
+  --player-mask-dir outputs/sam3/text/sam3_text_player_instance_masks \
+  --floor-mask-dir outputs/sam2/floor_features/sam2_floor_feature_instance_masks_with_outline \
+  --output-dir outputs/vggt/birds_eye_full \
+  --max-frames 100 \
+  --min-depth-conf 1.0 \
+  --max-floor-points-per-feature 180 \
+  --max-player-points 80 \
+  --fps 10
+```
+
+Current VGGT outputs:
+
+```bash
+outputs/vggt/birds_eye_full/birds_eye_player_locations_vggt_h264.mp4
+outputs/vggt/birds_eye_full/birds_eye_player_locations_vggt.json
+outputs/vggt/birds_eye_full/vggt_predictions_compact.npz
+```
+
 ## Output Video Format
 
 All rendered tracking videos are written with `libx264` via `imageio-ffmpeg`:
@@ -509,6 +552,7 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/refine_floor_homography_from_unlabeled_clicks.py`: refines a homography by treating free clicks as points on modeled floor features.
 - `scripts/render_camera_homography_overlay.py`: projects the fitted floor model and player floor-contact points back onto the camera video for calibration debugging.
 - `scripts/render_birds_eye_locations.py`: projects SAM3 player floor points through homography and writes a top-down player-location MP4.
+- `scripts/run_vggt_birds_eye.py`: uses VGGT camera/depth predictions plus SAM2 floor masks and SAM3 player masks to create a top-down player-location MP4 without relying on the earlier image homography.
 - `scripts/merge_sam3_team_detections.py`: optional older path that merges black/white SAM3 prompt detections and assigns team colors using mask-average color for ties.
 - `scripts/run_sam_body4d_from_masks.py`: runs SAM-Body4D from exported label masks.
 - `scripts/run_sam_body4d_from_sam3_boxes.py`: runs SAM-Body4D from SAM3 text detections, preserving multiple players.
