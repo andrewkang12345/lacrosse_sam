@@ -4,6 +4,7 @@ Small workflow for segmenting and tracking lacrosse players in a 10 second clip 
 
 - SAM3 text prompts through Hugging Face Transformers
 - SAM2 click prompts through Hugging Face Transformers
+- TransReID appearance clustering for team/goalkeeper labels
 - SAM-Body4D / SAM-3D-Body for per-player human meshes
 - A local browser click annotator for interactive player prompts
 - H.264 MP4 outputs viewable in VS Code
@@ -199,6 +200,116 @@ outputs/4d_humans_sam3_player/meshes_obj/<object_id>/*.obj
 outputs/4d_humans_sam3_player/metadata.json
 ```
 
+## 7. Team-Colored Meshes
+
+The recommended team-color path uses one generic SAM3 `player` prompt, then classifies each tracked player by masked torso color composition. It measures white, yellow/gold, dark, and gray torso pixel fractions instead of relying on one average color. Occluded or low-visibility torso samples are excluded from the per-player color decision, and labels are smoothed by SAM3 object ID so a jersey number or temporary shadow does not flip a player frame-by-frame.
+
+Run SAM3 once and export per-instance masks:
+
+```bash
+HF_TOKEN="$HF_TOKEN" python scripts/track_sam3_text.py \
+  --frames-dir data/frames_10fps \
+  --text 'player' \
+  --model facebook/sam3 \
+  --output outputs/sam3_text_player_instances.mp4 \
+  --mask-dir outputs/sam3_text_player_instances_label_masks \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --fps 10
+```
+
+Classify teams from upper-torso color:
+
+```bash
+python scripts/classify_sam3_teams_by_torso_color.py \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_text_player_instances.json \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --output-json outputs/sam3_team_torso_color_detections.json \
+  --output-video outputs/sam3_team_torso_color_detections_review.mp4 \
+  --fps 10 \
+  --classification-mode composition \
+  --white-fraction-threshold 0.25 \
+  --yellow-fraction-threshold 0.025 \
+  --team-colors 'black=255,80,40;white=70,170,255;unknown=180,180,180'
+```
+
+Use the merged JSON in either mesh runner. `team_colors` in the JSON controls the mesh colors:
+
+```bash
+PYOPENGL_PLATFORM=egl python scripts/run_sam_body4d_from_sam3_boxes.py \
+  --repo-root third_party/sam-body4d \
+  --config third_party/sam-body4d/configs/body4d.yaml \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_team_torso_color_detections.json \
+  --output-dir outputs/sam_body4d_torso_color_overlay \
+  --output-video outputs/sam_body4d_torso_color_overlay_h264.mp4 \
+  --render-mode overlay \
+  --fps 10
+
+PYOPENGL_PLATFORM=egl python scripts/run_4d_humans_from_sam3_boxes.py \
+  --repo-root third_party/4D-Humans \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_team_torso_color_detections.json \
+  --output-dir outputs/4d_humans_torso_color_overlay \
+  --output-video outputs/4d_humans_torso_color_overlay_h264.mp4 \
+  --fps 10 \
+  --save-mesh
+```
+
+## 8. TransReID Team Clusters
+
+Use TransReID when uniform color is not enough. This clusters each SAM3 tracked object by ReID embeddings from the official TransReID model. For this clip, use three clusters so the goalkeeper can separate from the two field-player teams:
+
+```bash
+git clone https://github.com/damo-cv/TransReID.git third_party/TransReID
+mkdir -p checkpoints/transreid
+gdown --id 1x6Na97ycxS0t2Dn_0iRKWe1U5ccIqASK \
+  -O checkpoints/transreid/msmt17_vit_transreid_stride.pth
+
+python scripts/classify_sam3_teams_by_transreid.py \
+  --clusters 3 \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_text_player_instances.json \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --output-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --output-video outputs/sam3_team_transreid_3clusters_detections_review.mp4 \
+  --review-sheet outputs/sam3_team_transreid_3clusters_detections_review_sheet.jpg \
+  --batch-size 16 \
+  --fps 10
+```
+
+Then render meshes with the three-cluster labels:
+
+```bash
+PYOPENGL_PLATFORM=egl python scripts/run_sam_body4d_from_sam3_boxes.py \
+  --repo-root third_party/sam-body4d \
+  --config third_party/sam-body4d/configs/body4d.yaml \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --output-dir outputs/sam_body4d_transreid_3clusters_overlay \
+  --output-video outputs/sam_body4d_transreid_3clusters_overlay_h264.mp4 \
+  --render-mode overlay \
+  --fps 10
+
+PYOPENGL_PLATFORM=egl python scripts/run_4d_humans_from_sam3_boxes.py \
+  --repo-root third_party/4D-Humans \
+  --frames-dir data/frames_10fps \
+  --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --output-dir outputs/4d_humans_transreid_3clusters_overlay \
+  --output-video outputs/4d_humans_transreid_3clusters_overlay_h264.mp4 \
+  --fps 10 \
+  --save-mesh
+```
+
+Current 3-cluster outputs:
+
+```bash
+outputs/sam3_team_transreid_3clusters_detections_review.mp4
+outputs/sam3_team_transreid_3clusters_detections_review_sheet.jpg
+outputs/sam_body4d_transreid_3clusters_overlay_h264.mp4
+outputs/4d_humans_transreid_3clusters_overlay_h264.mp4
+```
+
 ## Output Video Format
 
 All rendered tracking videos are written with `libx264` via `imageio-ffmpeg`:
@@ -216,6 +327,9 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/click_annotator.py`: local web UI for collecting full-resolution player clicks.
 - `scripts/track_sam2_clicks.py`: runs SAM2 video tracking from click prompts.
 - `scripts/track_sam3_text.py`: runs SAM3 video tracking from a text prompt.
+- `scripts/classify_sam3_teams_by_torso_color.py`: assigns team colors from masked torso color composition and smooths labels by SAM3 object ID.
+- `scripts/classify_sam3_teams_by_transreid.py`: assigns team/goalkeeper clusters from TransReID embeddings and smooths labels by SAM3 object ID.
+- `scripts/merge_sam3_team_detections.py`: optional older path that merges black/white SAM3 prompt detections and assigns team colors using mask-average color for ties.
 - `scripts/run_sam_body4d_from_masks.py`: runs SAM-Body4D from exported label masks.
 - `scripts/run_sam_body4d_from_sam3_boxes.py`: runs SAM-Body4D from SAM3 text detections, preserving multiple players.
 - `scripts/run_4d_humans_from_sam3_boxes.py`: runs 4D-Humans/HMR2 from SAM3 text detections and overlays SMPL meshes on the camera video.

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
 import torch
 from transformers import Sam3VideoModel, Sam3VideoProcessor
 
@@ -18,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="facebook/sam3")
     parser.add_argument("--output", default="outputs/sam3_text_tracks.mp4")
     parser.add_argument("--mask-dir", default=None)
+    parser.add_argument("--instance-mask-dir", default=None)
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--max-frames", type=int, default=0)
     return parser.parse_args()
@@ -59,6 +61,11 @@ def main() -> None:
         mask_dir.mkdir(parents=True, exist_ok=True)
         for path in mask_dir.glob("*.png"):
             path.unlink()
+    instance_mask_dir = Path(args.instance_mask_dir) if args.instance_mask_dir else None
+    if instance_mask_dir:
+        instance_mask_dir.mkdir(parents=True, exist_ok=True)
+        for path in instance_mask_dir.glob("*.npz"):
+            path.unlink()
     metadata = {
         "model": args.model,
         "text": args.text,
@@ -78,17 +85,16 @@ def main() -> None:
             scores = processed.get("scores")
             boxes = processed.get("boxes")
             masks_by_id = {int(obj_id): masks[i] for i, obj_id in enumerate(object_ids)}
+            mask_arrays = []
+            for i in range(len(object_ids)):
+                mask = masks[i]
+                if hasattr(mask, "detach"):
+                    mask = mask.detach().float().cpu().numpy()
+                mask_arrays.append(np.squeeze(mask))
             if mask_dir:
-                import numpy as np
                 from PIL import Image
 
                 if len(object_ids):
-                    mask_arrays = []
-                    for i in range(len(object_ids)):
-                        mask = masks[i]
-                        if hasattr(mask, "detach"):
-                            mask = mask.detach().float().cpu().numpy()
-                        mask_arrays.append(np.squeeze(mask))
                     stack = np.stack(mask_arrays, axis=0)
                     best = stack.argmax(axis=0)
                     score = stack.max(axis=0)
@@ -99,6 +105,17 @@ def main() -> None:
                     height, width = frames[output.frame_idx].height, frames[output.frame_idx].width
                     label_mask = np.zeros((height, width), dtype=np.uint8)
                 Image.fromarray(label_mask, mode="P").save(mask_dir / f"{output.frame_idx:08d}.png")
+            if instance_mask_dir:
+                if len(object_ids):
+                    stack = np.stack(mask_arrays, axis=0) > 0
+                else:
+                    height, width = frames[output.frame_idx].height, frames[output.frame_idx].width
+                    stack = np.zeros((0, height, width), dtype=bool)
+                np.savez_compressed(
+                    instance_mask_dir / f"{output.frame_idx:08d}.npz",
+                    object_ids=np.asarray(object_ids, dtype=np.int32),
+                    masks=stack.astype(np.uint8),
+                )
             rendered_frames.append(overlay_masks(frames[output.frame_idx], masks_by_id))
             metadata["frames"].append(
                 {

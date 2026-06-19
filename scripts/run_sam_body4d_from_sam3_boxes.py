@@ -48,17 +48,37 @@ def write_h264(frame_paths: list[Path], output_path: Path, fps: float) -> None:
             writer.append_data(rgb)
 
 
-def save_meshes(outputs, faces, mesh_dir: Path, focal_dir: Path, frame_idx: int, ids: list[int]) -> None:
-    from sam_3d_body.visualization.renderer import Renderer
+def palette_color(obj_id: int) -> list[int]:
     from utils.painter import color_list
+
+    return color_list[(obj_id + 4) % len(color_list)]
+
+
+def frame_colors(record: dict, ids: list[int]) -> list[list[int]]:
+    raw_colors = record.get("team_colors", [])
+    if len(raw_colors) == len(ids):
+        return [[int(v) for v in color] for color in raw_colors]
+    return [palette_color(obj_id) for obj_id in ids]
+
+
+def save_meshes(
+    outputs,
+    faces,
+    mesh_dir: Path,
+    focal_dir: Path,
+    frame_idx: int,
+    ids: list[int],
+    colors: list[list[int]],
+) -> None:
+    from sam_3d_body.visualization.renderer import Renderer
 
     if outputs is None:
         return
-    for person_output, obj_id in zip(outputs, ids):
+    for person_output, obj_id, rgb in zip(outputs, ids, colors):
         (mesh_dir / str(obj_id)).mkdir(parents=True, exist_ok=True)
         (focal_dir / str(obj_id)).mkdir(parents=True, exist_ok=True)
         renderer = Renderer(focal_length=person_output["focal_length"], faces=faces)
-        color = tuple(c / 255.0 for c in color_list[obj_id + 4])
+        color = tuple(c / 255.0 for c in rgb)
         mesh = renderer.vertices_to_trimesh(
             person_output["pred_vertices"],
             person_output["pred_cam_t"],
@@ -68,13 +88,13 @@ def save_meshes(outputs, faces, mesh_dir: Path, focal_dir: Path, frame_idx: int,
         focal = {
             "focal_length": float(np.asarray(person_output["focal_length"]).reshape(-1)[0]),
             "camera": [float(x) for x in np.asarray(person_output["pred_cam_t"]).reshape(-1)],
+            "color_rgb": [int(c) for c in rgb],
         }
         (focal_dir / str(obj_id) / f"{frame_idx:08d}.json").write_text(json.dumps(focal, indent=2) + "\n")
 
 
-def render_mesh_overlay(img_bgr: np.ndarray, outputs, faces, ids: list[int]) -> np.ndarray:
+def render_mesh_overlay(img_bgr: np.ndarray, outputs, faces, ids: list[int], colors: list[list[int]]) -> np.ndarray:
     from sam_3d_body.visualization.renderer import Renderer
-    from utils.painter import color_list
 
     if outputs is None:
         return img_bgr
@@ -86,17 +106,18 @@ def render_mesh_overlay(img_bgr: np.ndarray, outputs, faces, ids: list[int]) -> 
     order = np.argsort(-depths)
     sorted_outputs = [outputs[idx] for idx in order]
     sorted_ids = [ids[idx] for idx in order]
+    sorted_colors = [colors[idx] for idx in order]
 
     all_vertices = []
     all_faces = []
     all_colors = []
     vertex_offset = 0
-    for person_output, obj_id in zip(sorted_outputs, sorted_ids):
+    for person_output, obj_id, rgb in zip(sorted_outputs, sorted_ids, sorted_colors):
         vertices = person_output["pred_vertices"] + person_output["pred_cam_t"]
         all_vertices.append(vertices)
         all_faces.append(faces + vertex_offset)
         vertex_offset += len(vertices)
-        all_colors.append(color_list[obj_id + 4])
+        all_colors.append(rgb)
 
     if not all_vertices:
         return img_bgr
@@ -188,6 +209,7 @@ def main() -> None:
                 valid.append(i)
         ids = [ids[i] for i in valid]
         boxes = boxes[valid] if len(valid) else np.zeros((0, 4), dtype=np.float32)
+        colors = [frame_colors(record, [int(v) for v in record.get("object_ids", [])])[i] for i in valid]
         all_ids.update(ids)
 
         if len(ids):
@@ -199,12 +221,12 @@ def main() -> None:
                     masks=masks,
                     use_mask=True,
                     inference_type="body",
-                )
+            )
             if args.render_mode == "overlay":
-                rendered = render_mesh_overlay(img, outputs, estimator.faces, ids)
+                rendered = render_mesh_overlay(img, outputs, estimator.faces, ids, colors)
             else:
                 rendered = visualize_sample_together(img, outputs, estimator.faces, ids)
-            save_meshes(outputs, estimator.faces, mesh_dir, focal_dir, frame_idx, ids)
+            save_meshes(outputs, estimator.faces, mesh_dir, focal_dir, frame_idx, ids, colors)
         else:
             rendered = img if args.render_mode == "overlay" else np.ones_like(img) * 255
 

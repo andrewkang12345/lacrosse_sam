@@ -61,36 +61,72 @@ def write_h264(frame_paths: list[Path], output_path: Path, fps: float) -> None:
             writer.append_data(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
 
-def valid_sam3_detections(record: dict, min_width: float, min_height: float, score_threshold: float) -> tuple[list[int], np.ndarray]:
+def valid_sam3_detections(
+    record: dict,
+    min_width: float,
+    min_height: float,
+    score_threshold: float,
+) -> tuple[list[int], np.ndarray, list[list[int]]]:
     ids = [int(v) for v in record.get("object_ids", [])]
     boxes = np.asarray(record.get("boxes", []), dtype=np.float32)
     scores = np.asarray(record.get("scores", []), dtype=np.float32)
     if boxes.size == 0:
-        return [], np.zeros((0, 4), dtype=np.float32)
+        return [], np.zeros((0, 4), dtype=np.float32), []
     if scores.size != len(boxes):
         scores = np.ones((len(boxes),), dtype=np.float32)
+    raw_colors = record.get("team_colors", [])
+    has_colors = len(raw_colors) == len(boxes)
 
     keep = []
     for idx, box in enumerate(boxes):
         x1, y1, x2, y2 = box
         if x2 - x1 >= min_width and y2 - y1 >= min_height and scores[idx] >= score_threshold:
             keep.append(idx)
-    return [ids[i] for i in keep], boxes[keep] if keep else np.zeros((0, 4), dtype=np.float32)
+    colors = [[int(v) for v in raw_colors[i]] if has_colors else [int(255 * c) for c in LIGHT_BLUE] for i in keep]
+    return [ids[i] for i in keep], boxes[keep] if keep else np.zeros((0, 4), dtype=np.float32), colors
 
 
-def render_overlay(img_bgr: np.ndarray, renderer, verts: list[np.ndarray], cams: list[np.ndarray], focal_length: float) -> np.ndarray:
+def render_overlay(
+    img_bgr: np.ndarray,
+    mesh_renderer,
+    verts: list[np.ndarray],
+    cams: list[np.ndarray],
+    colors: list[list[int]],
+    focal_length: float,
+) -> np.ndarray:
     if not verts:
         return img_bgr
+    import pyrender
+    from hmr2.utils.renderer import create_raymond_lights
+
     height, width = img_bgr.shape[:2]
+    offscreen = pyrender.OffscreenRenderer(viewport_width=width, viewport_height=height, point_size=1.0)
+    scene = pyrender.Scene(bg_color=[0, 0, 0, 0.0], ambient_light=(0.3, 0.3, 0.3))
+
     with contextlib.redirect_stdout(io.StringIO()):
-        rgba = renderer.render_rgba_multiple(
-            verts,
-            cam_t=cams,
-            render_res=[width, height],
-            mesh_base_color=LIGHT_BLUE,
-            scene_bg_color=(0, 0, 0),
-            focal_length=focal_length,
-        )
+        for idx, (vertices, cam_t, rgb) in enumerate(zip(verts, cams, colors)):
+            color = tuple(float(c) / 255.0 for c in rgb)
+            mesh = mesh_renderer.vertices_to_trimesh(vertices, cam_t.copy(), color)
+            scene.add(pyrender.Mesh.from_trimesh(mesh), f"mesh_{idx}")
+
+    camera = pyrender.IntrinsicsCamera(
+        fx=focal_length,
+        fy=focal_length,
+        cx=width / 2.0,
+        cy=height / 2.0,
+        zfar=1e12,
+    )
+    camera_node = pyrender.Node(camera=camera, matrix=np.eye(4))
+    scene.add_node(camera_node)
+    mesh_renderer.add_point_lighting(scene, camera_node)
+    mesh_renderer.add_lighting(scene, camera_node)
+    for node in create_raymond_lights():
+        scene.add_node(node)
+
+    rgba, _ = offscreen.render(scene, flags=pyrender.RenderFlags.RGBA)
+    rgba = rgba.astype(np.float32) / 255.0
+    offscreen.delete()
+
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     alpha = rgba[:, :, 3:4]
     overlay_rgb = img_rgb * (1.0 - alpha) + rgba[:, :, :3] * alpha
@@ -165,11 +201,12 @@ def main() -> None:
     mesh_count = 0
     for frame_idx, (frame_path, record) in enumerate(zip(frame_paths, frame_meta)):
         img_bgr = cv2.imread(str(frame_path))
-        ids, boxes = valid_sam3_detections(record, args.min_width, args.min_height, args.score_threshold)
+        ids, boxes, colors = valid_sam3_detections(record, args.min_width, args.min_height, args.score_threshold)
         all_ids.update(ids)
 
         all_verts: list[np.ndarray] = []
         all_cam_t: list[np.ndarray] = []
+        all_colors: list[list[int]] = []
         per_person = []
         scaled_focal_length = float(model_cfg.EXTRA.FOCAL_LENGTH)
 
@@ -204,16 +241,18 @@ def main() -> None:
                         cam_t = pred_cam_t_full[local_idx]
                         all_verts.append(verts)
                         all_cam_t.append(cam_t)
+                        all_colors.append(colors[person_index])
                         per_person.append({"object_id": obj_id, "box": boxes[person_index].tolist()})
 
                         if args.save_mesh:
                             obj_dir = mesh_dir / str(obj_id)
                             obj_dir.mkdir(parents=True, exist_ok=True)
-                            mesh = renderer.vertices_to_trimesh(verts, cam_t.copy(), LIGHT_BLUE)
+                            color = tuple(float(c) / 255.0 for c in colors[person_index])
+                            mesh = renderer.vertices_to_trimesh(verts, cam_t.copy(), color)
                             mesh.export(obj_dir / f"{frame_idx:08d}.obj")
                             mesh_count += 1
 
-        rendered = render_overlay(img_bgr, renderer, all_verts, all_cam_t, scaled_focal_length)
+        rendered = render_overlay(img_bgr, renderer, all_verts, all_cam_t, all_colors, scaled_focal_length)
         out_path = rendered_dir / f"{frame_idx:08d}.jpg"
         cv2.imwrite(str(out_path), rendered)
         rendered_paths.append(out_path)
