@@ -367,6 +367,33 @@ python scripts/render_camera_homography_overlay.py \
   --fps 10
 ```
 
+For broadcast camera motion, estimate a dynamic homography for every frame by registering each frame to the calibrated reference frame:
+
+```bash
+python scripts/estimate_dynamic_floor_homographies.py \
+  --frames-dir data/frames_10fps \
+  --base-calibration outputs/floor_homography_curve_refined.json \
+  --output outputs/floor_homography_dynamic.json \
+  --reference-frame 77
+
+python scripts/render_camera_homography_overlay.py \
+  --calibration outputs/floor_homography_dynamic.json \
+  --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --frames-dir data/frames_10fps \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --output-video outputs/camera_floor_homography_overlay_dynamic_h264.mp4 \
+  --fps 10
+
+python scripts/render_birds_eye_locations.py \
+  --calibration outputs/floor_homography_dynamic.json \
+  --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
+  --frames-dir data/frames_10fps \
+  --instance-mask-dir outputs/sam3_text_player_instance_masks \
+  --output-video outputs/birds_eye_player_locations_dynamic_h264.mp4 \
+  --output-json outputs/birds_eye_player_locations_dynamic.json \
+  --fps 10
+```
+
 ## Output Video Format
 
 All rendered tracking videos are written with `libx264` via `imageio-ffmpeg`:
@@ -388,6 +415,7 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/classify_sam3_teams_by_transreid.py`: assigns team/goalkeeper clusters from TransReID embeddings and smooths labels by SAM3 object ID.
 - `scripts/floor_homography_annotator.py`: local web UI for clicking floor landmarks with known world coordinates.
 - `scripts/floor_free_click_annotator.py`: local web UI for unlabeled floor landmark clicks.
+- `scripts/estimate_dynamic_floor_homographies.py`: estimates per-frame camera motion and writes one floor homography per frame.
 - `scripts/refine_floor_homography_from_unlabeled_clicks.py`: refines a homography by treating free clicks as points on modeled floor features.
 - `scripts/render_camera_homography_overlay.py`: projects the fitted floor model and player floor-contact points back onto the camera video for calibration debugging.
 - `scripts/render_birds_eye_locations.py`: projects SAM3 player floor points through homography and writes a top-down player-location MP4.
