@@ -10,6 +10,7 @@ import numpy as np
 import trimesh
 
 from run_vggt_birds_eye import (
+    fit_plane_to_floor_homography,
     original_pixels_to_vggt,
     project_to_plane_coords,
     render_birds_eye,
@@ -246,6 +247,45 @@ def project_floor_masks_to_floor(
     return output
 
 
+def project_floor_masks_to_plane(
+    masks: dict[str, np.ndarray],
+    frame_bgr: np.ndarray,
+    world_points_frame: np.ndarray,
+    confidence_frame: np.ndarray,
+    resolution: int,
+    min_conf: float,
+    center: np.ndarray,
+    basis_u: np.ndarray,
+    basis_v: np.ndarray,
+    max_points_per_feature: int,
+    frame_idx: int,
+) -> dict[str, np.ndarray]:
+    output = {}
+    for feature, mask in masks.items():
+        mask_use = mask
+        if feature == "field_outline":
+            hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+            yellow = (hsv[:, :, 0] >= 18) & (hsv[:, :, 0] <= 42) & (hsv[:, :, 1] >= 55) & (hsv[:, :, 2] >= 90)
+            mask_use = mask & yellow
+        pixels = sample_mask_pixels(mask_use, max_points_per_feature, seed=frame_idx * 1009 + FLOOR_FEATURE_OBJECTS.get(feature, 0))
+        pts3d, _ = sample_world_points(world_points_frame, confidence_frame, pixels, frame_bgr.shape[:2], resolution, min_conf)
+        if len(pts3d) == 0:
+            continue
+        output[feature] = project_to_plane_coords(pts3d, center, basis_u, basis_v)
+    return output
+
+
+def transform_feature_uv_to_floor(feature_uv: dict[str, np.ndarray], H_plane_to_floor: np.ndarray) -> dict[str, np.ndarray]:
+    output = {}
+    for feature, uv in feature_uv.items():
+        floor_xy = transform_plane_to_floor(H_plane_to_floor, uv)
+        valid = np.isfinite(floor_xy).all(axis=1)
+        valid &= (floor_xy[:, 0] >= -8.0) & (floor_xy[:, 0] <= FLOOR_LENGTH_FT + 8.0)
+        valid &= (floor_xy[:, 1] >= -8.0) & (floor_xy[:, 1] <= FLOOR_WIDTH_FT + 8.0)
+        output[feature] = floor_xy[valid]
+    return output
+
+
 def load_vggt_world_points(vggt_npz: Path, vggt_repo: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     sys.path.insert(0, str(vggt_repo.resolve()))
     from vggt.utils.geometry import unproject_depth_map_to_point_map
@@ -276,6 +316,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-mesh-fit-vertices", type=int, default=900)
     parser.add_argument("--max-mesh-render-vertices", type=int, default=900)
     parser.add_argument("--max-mask-points-per-feature", type=int, default=700)
+    parser.add_argument("--fit-pitch-per-frame", action="store_true", help="Refit plane-to-rink transform from each frame's top-down landmark projections before moving meshes.")
+    parser.add_argument("--pitch-fit-regularization", type=float, default=0.04)
+    parser.add_argument("--min-pitch-fit-points", type=int, default=80)
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
@@ -310,6 +353,28 @@ def main() -> None:
         frame = cv2.imread(str(frame_paths[frame_idx]), cv2.IMREAD_COLOR)
         if frame is None:
             continue
+        masks = load_floor_feature_masks(floor_mask_dir, frame_idx, frame.shape[:2])
+        feature_plane_uv = project_floor_masks_to_plane(
+            masks,
+            frame,
+            world_points[local_idx],
+            depth_conf[local_idx],
+            resolution,
+            args.min_depth_conf,
+            center,
+            basis_u,
+            basis_v,
+            args.max_mask_points_per_feature,
+            frame_idx,
+        )
+        frame_H_plane_to_floor = H_plane_to_floor
+        pitch_fit_metrics = {"fallback": True, "reason": "global_vggt_alignment"}
+        if args.fit_pitch_per_frame and sum(len(points) for points in feature_plane_uv.values()) >= args.min_pitch_fit_points:
+            try:
+                frame_H_plane_to_floor, fit_metrics = fit_plane_to_floor_homography(feature_plane_uv, args.pitch_fit_regularization)
+                pitch_fit_metrics = {"fallback": False, **fit_metrics}
+            except Exception as exc:
+                pitch_fit_metrics = {"fallback": True, "reason": str(exc)}
         players = []
         mesh_players = []
         for obj_dir in sorted(mesh_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else p.name):
@@ -331,7 +396,7 @@ def main() -> None:
                 center,
                 basis_u,
                 basis_v,
-                H_plane_to_floor,
+                frame_H_plane_to_floor,
                 args.max_mesh_fit_vertices,
                 args.max_mesh_render_vertices,
             )
@@ -340,7 +405,7 @@ def main() -> None:
             if len(pts3d) == 0:
                 continue
             plane_uv = project_to_plane_coords(pts3d, center, basis_u, basis_v)
-            floor_xy = transform_plane_to_floor(H_plane_to_floor, np.median(plane_uv, axis=0, keepdims=True))[0]
+            floor_xy = transform_plane_to_floor(frame_H_plane_to_floor, np.median(plane_uv, axis=0, keepdims=True))[0]
             floor_xy[0] = np.clip(floor_xy[0], 0.0, FLOOR_LENGTH_FT)
             floor_xy[1] = np.clip(floor_xy[1], 0.0, FLOOR_WIDTH_FT)
             meta = frame_meta.get(frame_idx, {})
@@ -367,28 +432,16 @@ def main() -> None:
                         "metrics": mesh_metrics,
                     }
                 )
-        output_frames.append({"frame": int(frame_idx), "players": players})
+        output_frames.append({"frame": int(frame_idx), "pitch_fit_metrics": pitch_fit_metrics, "players": players})
 
-        mask_floor = project_floor_masks_to_floor(
-            load_floor_feature_masks(floor_mask_dir, frame_idx, frame.shape[:2]),
-            frame,
-            world_points[local_idx],
-            depth_conf[local_idx],
-            resolution,
-            args.min_depth_conf,
-            center,
-            basis_u,
-            basis_v,
-            H_plane_to_floor,
-            args.max_mask_points_per_feature,
-            frame_idx,
-        )
-        mesh_frames.append({"frame": int(frame_idx), "players": mesh_players, "field_masks": mask_floor})
+        mask_floor = transform_feature_uv_to_floor(feature_plane_uv, frame_H_plane_to_floor)
+        mesh_frames.append({"frame": int(frame_idx), "players": mesh_players, "field_masks": mask_floor, "pitch_fit_metrics": pitch_fit_metrics})
 
-    output_json = output_dir / "birds_eye_player_locations_sam_body4d_vggt.json"
-    output_video = output_dir / "birds_eye_player_locations_sam_body4d_vggt_h264.mp4"
-    mesh_output_json = output_dir / "birds_eye_sam_body4d_meshes_and_field_masks_vggt.json"
-    mesh_output_video = output_dir / "birds_eye_sam_body4d_meshes_and_field_masks_vggt_h264.mp4"
+    suffix = "_pitchfit" if args.fit_pitch_per_frame else ""
+    output_json = output_dir / f"birds_eye_player_locations_sam_body4d_vggt{suffix}.json"
+    output_video = output_dir / f"birds_eye_player_locations_sam_body4d_vggt{suffix}_h264.mp4"
+    mesh_output_json = output_dir / f"birds_eye_sam_body4d_meshes_and_field_masks_vggt{suffix}.json"
+    mesh_output_video = output_dir / f"birds_eye_sam_body4d_meshes_and_field_masks_vggt{suffix}_h264.mp4"
     output_json.write_text(
         json.dumps(
             {
@@ -398,6 +451,7 @@ def main() -> None:
                 "mesh_root": args.mesh_root,
                 "focal_root": args.focal_root,
                 "floor_mask_dir": args.floor_mask_dir,
+                "fit_pitch_per_frame": bool(args.fit_pitch_per_frame),
                 "frames": output_frames,
             },
             indent=2,
@@ -445,7 +499,14 @@ def main() -> None:
                 }
             )
         rendered_mesh_frames.append(canvas)
-        mesh_json_frames.append({"frame": int(item["frame"]), "field_mask_points": mask_counts, "players": players_json})
+        mesh_json_frames.append(
+            {
+                "frame": int(item["frame"]),
+                "pitch_fit_metrics": item.get("pitch_fit_metrics", {}),
+                "field_mask_points": mask_counts,
+                "players": players_json,
+            }
+        )
     write_h264(rendered_mesh_frames, mesh_output_video, args.fps)
     mesh_output_json.write_text(
         json.dumps(
@@ -456,6 +517,7 @@ def main() -> None:
                 "mesh_root": args.mesh_root,
                 "focal_root": args.focal_root,
                 "floor_mask_dir": args.floor_mask_dir,
+                "fit_pitch_per_frame": bool(args.fit_pitch_per_frame),
                 "frames": mesh_json_frames,
             },
             indent=2,
