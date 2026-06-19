@@ -456,7 +456,9 @@ python scripts/render_camera_homography_overlay.py \
   --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
   --frames-dir data/frames_10fps \
   --instance-mask-dir outputs/sam3_text_player_instance_masks \
-  --output-video outputs/camera_floor_homography_overlay_sam2_landmarks_no_outline_h264.mp4 \
+  --output-video outputs/camera_floor_homography_overlay_sam2_landmarks_masks_no_outline_h264.mp4 \
+  --draw-landmark-masks \
+  --landmark-mask-alpha 0.45 \
   --fps 10
 
 python scripts/render_birds_eye_locations.py \
@@ -464,12 +466,13 @@ python scripts/render_birds_eye_locations.py \
   --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
   --frames-dir data/frames_10fps \
   --instance-mask-dir outputs/sam3_text_player_instance_masks \
-  --output-video outputs/birds_eye_player_locations_sam2_landmarks_no_outline_h264.mp4 \
-  --output-json outputs/birds_eye_player_locations_sam2_landmarks_no_outline.json \
+  --output-video outputs/birds_eye_player_locations_sam2_landmarks_masks_no_outline_h264.mp4 \
+  --output-json outputs/birds_eye_player_locations_sam2_landmarks_masks_no_outline.json \
+  --draw-landmark-mask-points \
   --fps 10
 ```
 
-The current no-outline SAM2 landmark pass refines 82 of 100 frames from tracked landmark masks and falls back to the prior dynamic calibration on the remaining frames.
+The current no-outline SAM2 landmark pass refines 82 of 100 frames from tracked landmark masks and falls back to the prior dynamic calibration on the remaining frames. `--draw-landmark-masks` overlays the SAM2 camera-space floor landmark segmentations on the camera video; `--draw-landmark-mask-points` projects sampled SAM2 landmark-mask pixels onto the top-down floor view.
 
 ## Output Video Format
 

@@ -21,6 +21,22 @@ from render_birds_eye_locations import (
 )
 
 
+FEATURE_COLORS_BGR = {
+    "left_restraining_line": (69, 122, 255),
+    "right_restraining_line": (255, 167, 90),
+    "goal_crease": (74, 211, 247),
+    "midfield_line": (123, 212, 100),
+    "field_outline": (255, 124, 215),
+}
+FEATURE_LABELS = {
+    "left_restraining_line": "left R",
+    "right_restraining_line": "right R",
+    "goal_crease": "crease",
+    "midfield_line": "mid",
+    "field_outline": "outline",
+}
+
+
 def write_h264(frames_bgr: list[np.ndarray], output_path: Path, fps: float) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with imageio.get_writer(
@@ -142,30 +158,76 @@ def collect_feature_clicks(calibration: dict) -> list[dict]:
 
 
 def draw_feature_clicks(frame: np.ndarray, calibration: dict, fit_frame: int) -> None:
-    colors = {
-        "left_restraining_line": (69, 122, 255),
-        "right_restraining_line": (255, 167, 90),
-        "goal_crease": (74, 211, 247),
-        "midfield_line": (123, 212, 100),
-        "field_outline": (255, 124, 215),
-    }
-    labels = {
-        "left_restraining_line": "left R",
-        "right_restraining_line": "right R",
-        "goal_crease": "crease",
-        "midfield_line": "mid",
-        "field_outline": "outline",
-    }
     clicks = [click for click in collect_feature_clicks(calibration) if int(click["frame"]) == fit_frame and "image" in click]
     for idx, click in enumerate(clicks, 1):
         feature = click.get("feature", "unknown")
         image = (int(round(click["image"]["x"])), int(round(click["image"]["y"])))
-        color = colors.get(feature, (255, 255, 255))
+        color = FEATURE_COLORS_BGR.get(feature, (255, 255, 255))
         cv2.circle(frame, image, 8, color, -1, cv2.LINE_AA)
         cv2.circle(frame, image, 10, (0, 0, 0), 1, cv2.LINE_AA)
-        label = f"{idx}:{labels.get(feature, feature)}"
+        label = f"{idx}:{FEATURE_LABELS.get(feature, feature)}"
         cv2.putText(frame, label, (image[0] + 9, image[1] - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, label, (image[0] + 9, image[1] - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+def load_tracked_landmark_mask(source: dict, frame_idx: int, shape: tuple[int, int]) -> np.ndarray:
+    height, width = shape
+    mask_dir = Path(source["path"])
+    object_id = source.get("object_id")
+    npz_path = mask_dir / f"{frame_idx:08d}.npz"
+    png_path = mask_dir / f"{frame_idx:08d}.png"
+    if npz_path.exists():
+        data = np.load(npz_path)
+        object_ids = [int(value) for value in data["object_ids"].tolist()]
+        masks = data["masks"].astype(bool)
+        if masks.size == 0:
+            return np.zeros((height, width), dtype=bool)
+        if object_id is not None:
+            object_id = int(object_id)
+            if object_id not in object_ids:
+                return np.zeros((height, width), dtype=bool)
+            mask = masks[object_ids.index(object_id)]
+        else:
+            mask = masks.any(axis=0)
+        if mask.shape != (height, width):
+            mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST).astype(bool)
+        return mask
+    if png_path.exists():
+        mask = cv2.imread(str(png_path), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            return np.zeros((height, width), dtype=bool)
+        if mask.shape != (height, width):
+            mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+        if object_id is not None:
+            return mask == int(object_id)
+        return mask > 0
+    return np.zeros((height, width), dtype=bool)
+
+
+def draw_tracked_landmark_masks(frame: np.ndarray, calibration: dict, frame_idx: int, alpha: float) -> None:
+    sources = calibration.get("tracked_mask_sources", [])
+    if not sources:
+        return
+    height, width = frame.shape[:2]
+    for source in sources:
+        feature = str(source.get("feature", "unknown"))
+        mask = load_tracked_landmark_mask(source, frame_idx, (height, width))
+        if not mask.any():
+            continue
+        color = np.asarray(FEATURE_COLORS_BGR.get(feature, (255, 255, 255)), dtype=np.float32)
+        frame_float = frame.astype(np.float32)
+        frame_float[mask] = (1.0 - alpha) * frame_float[mask] + alpha * color
+        frame[:] = np.clip(frame_float, 0, 255).astype(np.uint8)
+
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(frame, contours, -1, tuple(int(v) for v in color), 2, cv2.LINE_AA)
+        ys, xs = np.where(mask)
+        if len(xs):
+            x = int(np.median(xs))
+            y = int(np.percentile(ys, 10))
+            label = FEATURE_LABELS.get(feature, feature)
+            cv2.putText(frame, label, (x + 6, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, label, (x + 6, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
 
 
 def draw_player_points(
@@ -218,6 +280,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames-dir", default="data/frames_10fps")
     parser.add_argument("--instance-mask-dir", default="outputs/sam3_text_player_instance_masks")
     parser.add_argument("--output-video", default="outputs/camera_floor_homography_overlay_h264.mp4")
+    parser.add_argument("--draw-landmark-masks", action="store_true", help="Overlay tracked floor-landmark segmentations from calibration tracked_mask_sources.")
+    parser.add_argument("--landmark-mask-alpha", type=float, default=0.35)
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--ransac-threshold-ft", type=float, default=3.0)
@@ -245,6 +309,8 @@ def main() -> None:
         overlay = frame.copy()
         draw_projected_floor(overlay, H_world_to_image)
         cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, dst=frame)
+        if args.draw_landmark_masks:
+            draw_tracked_landmark_masks(frame, calibration, frame_idx, args.landmark_mask_alpha)
         draw_player_points(frame, frame_idx, record, mask_dir, fit.H)
         if frame_idx == fit.frame:
             draw_calibration_clicks(frame, calibration, fit.frame, H_world_to_image)

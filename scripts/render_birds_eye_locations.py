@@ -19,6 +19,13 @@ DEFAULT_COLORS = [
     [245, 210, 55],
     [180, 180, 180],
 ]
+FEATURE_COLORS_BGR = {
+    "left_restraining_line": (69, 122, 255),
+    "right_restraining_line": (255, 167, 90),
+    "goal_crease": (74, 211, 247),
+    "midfield_line": (123, 212, 100),
+    "field_outline": (255, 124, 215),
+}
 
 LANDMARK_WORLD_POINTS = [
     (100.0, 42.5),
@@ -77,6 +84,40 @@ def load_instance_mask(mask_dir: Path, frame_idx: int, object_ids: list[int], de
     if mask_idx < masks.shape[0]:
         return masks[mask_idx]
     return None
+
+
+def load_tracked_landmark_mask(source: dict, frame_idx: int, shape: tuple[int, int]) -> np.ndarray:
+    height, width = shape
+    mask_dir = Path(source["path"])
+    object_id = source.get("object_id")
+    npz_path = mask_dir / f"{frame_idx:08d}.npz"
+    png_path = mask_dir / f"{frame_idx:08d}.png"
+    if npz_path.exists():
+        data = np.load(npz_path)
+        object_ids = [int(value) for value in data["object_ids"].tolist()]
+        masks = data["masks"].astype(bool)
+        if masks.size == 0:
+            return np.zeros((height, width), dtype=bool)
+        if object_id is not None:
+            object_id = int(object_id)
+            if object_id not in object_ids:
+                return np.zeros((height, width), dtype=bool)
+            mask = masks[object_ids.index(object_id)]
+        else:
+            mask = masks.any(axis=0)
+        if mask.shape != (height, width):
+            mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST).astype(bool)
+        return mask
+    if png_path.exists():
+        mask = cv2.imread(str(png_path), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            return np.zeros((height, width), dtype=bool)
+        if mask.shape != (height, width):
+            mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+        if object_id is not None:
+            return mask == int(object_id)
+        return mask > 0
+    return np.zeros((height, width), dtype=bool)
 
 
 def floor_point_from_detection(
@@ -324,6 +365,12 @@ def transform_point(H: np.ndarray, point: tuple[float, float]) -> tuple[float, f
     return float(out[0]), float(out[1])
 
 
+def transform_points(H: np.ndarray, points: np.ndarray) -> np.ndarray:
+    if len(points) == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    return cv2.perspectiveTransform(points.astype(np.float32).reshape(1, -1, 2), H).reshape(-1, 2)
+
+
 def clamp_world_point(x: float, y: float) -> tuple[float, float]:
     return float(np.clip(x, 0.0, FLOOR_LENGTH_FT)), float(np.clip(y, 0.0, FLOOR_WIDTH_FT))
 
@@ -396,6 +443,52 @@ def draw_floor(width: int, height: int, margin: int) -> np.ndarray:
     return img
 
 
+def sample_mask_pixels(mask: np.ndarray, max_points: int, seed: int) -> np.ndarray:
+    ys, xs = np.where(mask)
+    if len(xs) == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    points = np.column_stack([xs, ys]).astype(np.float32)
+    if len(points) <= max_points:
+        return points
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(len(points), size=max_points, replace=False)
+    return points[idx]
+
+
+def draw_projected_landmark_masks(
+    canvas: np.ndarray,
+    calibration: dict,
+    frame_idx: int,
+    source_shape: tuple[int, int],
+    H_image_to_world: np.ndarray,
+    max_points_per_source: int,
+    point_radius: int,
+    margin: int,
+) -> None:
+    sources = calibration.get("tracked_mask_sources", [])
+    if not sources:
+        return
+    for source in sources:
+        feature = str(source.get("feature", "unknown"))
+        mask = load_tracked_landmark_mask(source, frame_idx, source_shape)
+        points = sample_mask_pixels(mask, max_points_per_source, seed=frame_idx * 1009 + len(feature))
+        if len(points) == 0:
+            continue
+        world = transform_points(H_image_to_world, points)
+        valid = (
+            np.isfinite(world).all(axis=1)
+            & (world[:, 0] >= -5.0)
+            & (world[:, 0] <= FLOOR_LENGTH_FT + 5.0)
+            & (world[:, 1] >= -5.0)
+            & (world[:, 1] <= FLOOR_WIDTH_FT + 5.0)
+        )
+        color = FEATURE_COLORS_BGR.get(feature, (255, 255, 255))
+        for x, y in world[valid]:
+            cx, cy = clamp_world_point(float(x), float(y))
+            p = world_to_canvas(cx, cy, canvas.shape[1], canvas.shape[0], margin)
+            cv2.circle(canvas, p, point_radius, color, -1, cv2.LINE_AA)
+
+
 def rgb_to_bgr(rgb: list[int]) -> tuple[int, int, int]:
     return int(rgb[2]), int(rgb[1]), int(rgb[0])
 
@@ -429,6 +522,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ransac-threshold-ft", type=float, default=3.0)
     parser.add_argument("--auto-fit-iterations", type=int, default=40000)
     parser.add_argument("--trail-frames", type=int, default=12)
+    parser.add_argument("--draw-landmark-mask-points", action="store_true", help="Project tracked floor-landmark mask pixels onto the top-down floor.")
+    parser.add_argument("--landmark-mask-points-per-source", type=int, default=350)
+    parser.add_argument("--landmark-mask-point-radius", type=int, default=2)
     parser.add_argument("--max-frames", type=int, default=0)
     return parser.parse_args()
 
@@ -498,6 +594,17 @@ def main() -> None:
             tracks.setdefault(obj_id, []).append((frame_idx, world_x, world_y, [int(c) for c in color]))
 
         canvas = draw_floor(args.width, args.height, args.margin)
+        if args.draw_landmark_mask_points:
+            draw_projected_landmark_masks(
+                canvas,
+                calibration,
+                frame_idx,
+                (height, width),
+                fit.H,
+                args.landmark_mask_points_per_source,
+                args.landmark_mask_point_radius,
+                args.margin,
+            )
         min_trail_frame = frame_idx - max(0, args.trail_frames)
         for obj_id, samples in tracks.items():
             recent = [(x, y, color) for f, x, y, color in samples if f >= min_trail_frame and f <= frame_idx]
