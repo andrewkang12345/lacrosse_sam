@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from render_birds_eye_locations import FLOOR_LENGTH_FT, FLOOR_WIDTH_FT, CORNER_RADIUS_FT, fit_homographies
+from render_birds_eye_locations import FLOOR_LENGTH_FT, FLOOR_WIDTH_FT, CORNER_RADIUS_FT, fit_homographies, nearest_fit
 
 
 def load_gray(path: Path) -> np.ndarray:
@@ -121,7 +121,7 @@ def main() -> None:
         raise ValueError(f"reference frame {args.reference_frame} outside 0..{len(frame_paths)-1}")
 
     base = json.loads(Path(args.base_calibration).read_text())
-    base_fit = fit_homographies(base, ransac_threshold_ft=3.0)[0]
+    base_fit = nearest_fit(fit_homographies(base, ransac_threshold_ft=3.0), args.reference_frame)
     base_H_ref_to_world = base_fit.H
 
     grays = [load_gray(path) for path in frame_paths]

@@ -124,6 +124,50 @@ def draw_unlabeled_clicks(frame: np.ndarray, calibration: dict, fit_frame: int) 
         cv2.putText(frame, f"free {idx}", (image[0] + 9, image[1] - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
 
+def collect_feature_clicks(calibration: dict) -> list[dict]:
+    paths = []
+    if calibration.get("source_feature_clicks"):
+        paths.append(Path(calibration["source_feature_clicks"]))
+    if calibration.get("source_base_calibration"):
+        base_path = Path(calibration["source_base_calibration"])
+        if base_path.exists():
+            base = json.loads(base_path.read_text())
+            if base.get("source_feature_clicks"):
+                paths.append(Path(base["source_feature_clicks"]))
+    clicks = []
+    for path in paths:
+        if path.exists():
+            clicks.extend(json.loads(path.read_text()).get("clicks", []))
+    return clicks
+
+
+def draw_feature_clicks(frame: np.ndarray, calibration: dict, fit_frame: int) -> None:
+    colors = {
+        "left_restraining_line": (69, 122, 255),
+        "right_restraining_line": (255, 167, 90),
+        "goal_crease": (74, 211, 247),
+        "midfield_line": (123, 212, 100),
+        "field_outline": (255, 124, 215),
+    }
+    labels = {
+        "left_restraining_line": "left R",
+        "right_restraining_line": "right R",
+        "goal_crease": "crease",
+        "midfield_line": "mid",
+        "field_outline": "outline",
+    }
+    clicks = [click for click in collect_feature_clicks(calibration) if int(click["frame"]) == fit_frame and "image" in click]
+    for idx, click in enumerate(clicks, 1):
+        feature = click.get("feature", "unknown")
+        image = (int(round(click["image"]["x"])), int(round(click["image"]["y"])))
+        color = colors.get(feature, (255, 255, 255))
+        cv2.circle(frame, image, 8, color, -1, cv2.LINE_AA)
+        cv2.circle(frame, image, 10, (0, 0, 0), 1, cv2.LINE_AA)
+        label = f"{idx}:{labels.get(feature, feature)}"
+        cv2.putText(frame, label, (image[0] + 9, image[1] - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame, label, (image[0] + 9, image[1] - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (255, 255, 255), 1, cv2.LINE_AA)
+
+
 def draw_player_points(
     frame: np.ndarray,
     frame_idx: int,
@@ -205,6 +249,7 @@ def main() -> None:
         if frame_idx == fit.frame:
             draw_calibration_clicks(frame, calibration, fit.frame, H_world_to_image)
             draw_unlabeled_clicks(frame, calibration, fit.frame)
+            draw_feature_clicks(frame, calibration, fit.frame)
         cv2.putText(
             frame,
             f"floor fit from frame {fit.frame}: points {fit.inliers}/{fit.points}, mean err {fit.mean_error_ft:.2f} {error_units}",

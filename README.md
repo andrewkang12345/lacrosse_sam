@@ -349,6 +349,25 @@ python scripts/render_birds_eye_locations.py \
 
 The renderer auto-matches the unlabeled clicks to the known NLL floor line/landmark model, uses each player's SAM3 mask bottom point, falls back to the detection box bottom-center, maps it through the nearest calibrated homography, and draws colored team dots on a 200 ft x 85 ft NLL floor diagram.
 
+The more reliable calibration path uses coarse feature labels instead of fully free clicks. Select one feature category, then click any point on that feature:
+
+```bash
+python scripts/floor_feature_annotator.py \
+  --manifest outputs/prompt_frames/manifest.json \
+  --frames-dir data/frames_10fps \
+  --output outputs/floor_feature_clicks.json \
+  --host 0.0.0.0 \
+  --port 8770
+
+python scripts/fit_floor_homography_from_feature_clicks.py \
+  --feature-clicks outputs/floor_feature_clicks.json \
+  --initial-calibration outputs/floor_homography_dynamic.json \
+  --output outputs/floor_homography_feature_fit.json \
+  --reference-frame 78
+```
+
+The feature fitter models the goal crease as a front semicircle plus a rear rectangle at each goal, not as a pure circle.
+
 For debugging and refinement, fit clicks as points on floor features and project the fitted floor model back onto the camera video:
 
 ```bash
@@ -372,25 +391,25 @@ For broadcast camera motion, estimate a dynamic homography for every frame by re
 ```bash
 python scripts/estimate_dynamic_floor_homographies.py \
   --frames-dir data/frames_10fps \
-  --base-calibration outputs/floor_homography_curve_refined.json \
-  --output outputs/floor_homography_dynamic.json \
-  --reference-frame 77
+  --base-calibration outputs/floor_homography_feature_fit.json \
+  --output outputs/floor_homography_feature_dynamic.json \
+  --reference-frame 78
 
 python scripts/render_camera_homography_overlay.py \
-  --calibration outputs/floor_homography_dynamic.json \
+  --calibration outputs/floor_homography_feature_dynamic.json \
   --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
   --frames-dir data/frames_10fps \
   --instance-mask-dir outputs/sam3_text_player_instance_masks \
-  --output-video outputs/camera_floor_homography_overlay_dynamic_h264.mp4 \
+  --output-video outputs/camera_floor_homography_overlay_feature_dynamic_h264.mp4 \
   --fps 10
 
 python scripts/render_birds_eye_locations.py \
-  --calibration outputs/floor_homography_dynamic.json \
+  --calibration outputs/floor_homography_feature_dynamic.json \
   --sam3-json outputs/sam3_team_transreid_3clusters_detections.json \
   --frames-dir data/frames_10fps \
   --instance-mask-dir outputs/sam3_text_player_instance_masks \
-  --output-video outputs/birds_eye_player_locations_dynamic_h264.mp4 \
-  --output-json outputs/birds_eye_player_locations_dynamic.json \
+  --output-video outputs/birds_eye_player_locations_feature_dynamic_h264.mp4 \
+  --output-json outputs/birds_eye_player_locations_feature_dynamic.json \
   --fps 10
 ```
 
@@ -415,6 +434,8 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/classify_sam3_teams_by_transreid.py`: assigns team/goalkeeper clusters from TransReID embeddings and smooths labels by SAM3 object ID.
 - `scripts/floor_homography_annotator.py`: local web UI for clicking floor landmarks with known world coordinates.
 - `scripts/floor_free_click_annotator.py`: local web UI for unlabeled floor landmark clicks.
+- `scripts/floor_feature_annotator.py`: local web UI for coarse floor-feature clicks.
+- `scripts/fit_floor_homography_from_feature_clicks.py`: fits homography from coarse feature-labeled clicks, including the semicircle-plus-rectangle crease model.
 - `scripts/estimate_dynamic_floor_homographies.py`: estimates per-frame camera motion and writes one floor homography per frame.
 - `scripts/refine_floor_homography_from_unlabeled_clicks.py`: refines a homography by treating free clicks as points on modeled floor features.
 - `scripts/render_camera_homography_overlay.py`: projects the fitted floor model and player floor-contact points back onto the camera video for calibration debugging.
