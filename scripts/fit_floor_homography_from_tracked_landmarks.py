@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from scipy.spatial import cKDTree
 
-from fit_floor_homography_from_feature_clicks import feature_samples, refine_frame
+from fit_floor_homography_from_feature_clicks import feature_residual, feature_samples, refine_frame
 from render_birds_eye_locations import (
     CORNER_RADIUS_FT,
     FLOOR_LENGTH_FT,
@@ -100,6 +100,93 @@ def project_world(H_world_to_image: np.ndarray, world_points: np.ndarray) -> np.
     return cv2.perspectiveTransform(world_points.astype(np.float32).reshape(1, -1, 2), H_world_to_image).reshape(-1, 2).astype(np.float64)
 
 
+def similarity_to_h(params: np.ndarray) -> np.ndarray:
+    tx, ty, theta, log_scale = [float(v) for v in params]
+    scale = float(np.exp(log_scale))
+    c = float(np.cos(theta))
+    s = float(np.sin(theta))
+    return np.asarray(
+        [
+            [scale * c, -scale * s, tx],
+            [scale * s, scale * c, ty],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def refine_frame_image_similarity(
+    frame: int,
+    clicks: list[dict],
+    initial_H_image_to_world: np.ndarray,
+    samples_by_feature: dict[str, np.ndarray],
+    max_nfev: int,
+    regularization: float,
+) -> tuple[np.ndarray, dict]:
+    from scipy.optimize import least_squares
+
+    initial_H_world_to_image = np.linalg.inv(initial_H_image_to_world)
+    p0 = np.zeros(4, dtype=np.float64)
+
+    def residual_fn(params: np.ndarray) -> np.ndarray:
+        image_adjustment = similarity_to_h(params)
+        H_world_to_image = image_adjustment @ initial_H_world_to_image
+        residuals = []
+        for click in clicks:
+            residual, distance, _ = feature_residual(click, H_world_to_image, samples_by_feature)
+            scale = max(1.0, distance / 90.0)
+            residuals.extend((residual / scale).tolist())
+        if regularization > 0:
+            tx, ty, theta, log_scale = params
+            residuals.extend(
+                [
+                    float(tx) * regularization,
+                    float(ty) * regularization,
+                    float(theta) * regularization * 220.0,
+                    float(log_scale) * regularization * 220.0,
+                ]
+            )
+        return np.asarray(residuals, dtype=np.float64)
+
+    result = least_squares(
+        residual_fn,
+        p0,
+        loss="soft_l1",
+        f_scale=10.0,
+        max_nfev=max_nfev,
+        xtol=1e-9,
+        ftol=1e-9,
+        gtol=1e-9,
+    )
+    image_adjustment = similarity_to_h(result.x)
+    H_world_to_image = image_adjustment @ initial_H_world_to_image
+    H_image_to_world = np.linalg.inv(H_world_to_image)
+
+    errors = []
+    nearest = []
+    for click in clicks:
+        _, distance, sample_idx = feature_residual(click, H_world_to_image, samples_by_feature)
+        errors.append(distance)
+        nearest.append(sample_idx)
+    metrics = {
+        "success": bool(result.success),
+        "cost": float(result.cost),
+        "mean_error_px": float(np.mean(errors)) if errors else 0.0,
+        "max_error_px": float(np.max(errors)) if errors else 0.0,
+        "errors_px": [float(v) for v in errors],
+        "nearest_sample_indices": nearest,
+        "nfev": int(result.nfev),
+        "features": {feature: sum(1 for click in clicks if click["feature"] == feature) for feature in sorted({click["feature"] for click in clicks})},
+        "image_similarity_adjustment": {
+            "tx_px": float(result.x[0]),
+            "ty_px": float(result.x[1]),
+            "rotation_deg": float(np.rad2deg(result.x[2])),
+            "scale": float(np.exp(result.x[3])),
+        },
+    }
+    return H_image_to_world, metrics
+
+
 def build_feature_trees(
     H_image_to_world: np.ndarray,
     samples_by_feature: dict[str, np.ndarray],
@@ -179,6 +266,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-component-area", type=int, default=18)
     parser.add_argument("--min-points", type=int, default=18)
     parser.add_argument("--min-features", type=int, default=2)
+    parser.add_argument("--refine-mode", choices=["full_homography", "image_similarity"], default="full_homography")
     parser.add_argument("--max-nfev", type=int, default=900)
     parser.add_argument("--regularization", type=float, default=0.018)
     parser.add_argument("--ransac-threshold-ft", type=float, default=3.0)
@@ -253,14 +341,24 @@ def main() -> None:
             )
             continue
 
-        H, metrics = refine_frame(
-            frame_idx,
-            clicks,
-            initial_fit.H,
-            samples_by_feature,
-            max_nfev=args.max_nfev,
-            regularization=args.regularization,
-        )
+        if args.refine_mode == "image_similarity":
+            H, metrics = refine_frame_image_similarity(
+                frame_idx,
+                clicks,
+                initial_fit.H,
+                samples_by_feature,
+                max_nfev=args.max_nfev,
+                regularization=args.regularization,
+            )
+        else:
+            H, metrics = refine_frame(
+                frame_idx,
+                clicks,
+                initial_fit.H,
+                samples_by_feature,
+                max_nfev=args.max_nfev,
+                regularization=args.regularization,
+            )
         homographies.append(
             {
                 "frame": frame_idx,
@@ -279,7 +377,7 @@ def main() -> None:
         "schema": "floor_homography_matrix_v1",
         "world_units": "feet",
         "floor": {"length_ft": FLOOR_LENGTH_FT, "width_ft": FLOOR_WIDTH_FT, "corner_radius_ft": CORNER_RADIUS_FT},
-        "fit_method": "tracked_landmark_masks_refined_from_initial_dynamic_homography",
+        "fit_method": f"tracked_landmark_masks_{args.refine_mode}_refined_from_initial_dynamic_homography",
         "source_initial_calibration": args.initial_calibration,
         "source_feature_clicks": args.feature_clicks,
         "tracked_mask_sources": [
@@ -293,6 +391,7 @@ def main() -> None:
             "min_component_area": args.min_component_area,
             "min_points": args.min_points,
             "min_features": args.min_features,
+            "refine_mode": args.refine_mode,
         },
         "assignment_metrics": assignment_metrics,
         "generated_tracked_feature_click_preview": all_generated_clicks,

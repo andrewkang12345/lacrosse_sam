@@ -86,6 +86,27 @@ def circle_points(cx: float, cy: float, radius: float, samples: int = 96) -> np.
     return np.column_stack([cx + radius * np.cos(angles), cy + radius * np.sin(angles)]).astype(np.float32)
 
 
+def arc_points(cx: float, cy: float, radius: float, start_deg: float, stop_deg: float, samples: int = 96) -> np.ndarray:
+    angles = np.deg2rad(np.linspace(start_deg, stop_deg, samples))
+    return np.column_stack([cx + radius * np.cos(angles), cy + radius * np.sin(angles)]).astype(np.float32)
+
+
+def draw_projected_crease(frame: np.ndarray, H_world_to_image: np.ndarray, goal_x: float, color: tuple[int, int, int]) -> None:
+    radius = 9.25
+    lower = 42.5 - radius
+    upper = 42.5 + radius
+    if goal_x < FLOOR_LENGTH_FT / 2.0:
+        draw_projected_polyline(frame, H_world_to_image, arc_points(goal_x, 42.5, radius, -90.0, 90.0), color, 2)
+        draw_projected_polyline(frame, H_world_to_image, line_points(0.0, lower, goal_x, lower, 32), color, 2)
+        draw_projected_polyline(frame, H_world_to_image, line_points(0.0, upper, goal_x, upper, 32), color, 2)
+        draw_projected_polyline(frame, H_world_to_image, line_points(0.0, lower, 0.0, upper, 32), color, 2)
+    else:
+        draw_projected_polyline(frame, H_world_to_image, arc_points(goal_x, 42.5, radius, 90.0, 270.0), color, 2)
+        draw_projected_polyline(frame, H_world_to_image, line_points(goal_x, lower, FLOOR_LENGTH_FT, lower, 32), color, 2)
+        draw_projected_polyline(frame, H_world_to_image, line_points(goal_x, upper, FLOOR_LENGTH_FT, upper, 32), color, 2)
+        draw_projected_polyline(frame, H_world_to_image, line_points(FLOOR_LENGTH_FT, lower, FLOOR_LENGTH_FT, upper, 32), color, 2)
+
+
 def draw_projected_floor(frame: np.ndarray, H_world_to_image: np.ndarray) -> None:
     yellow = (0, 220, 255)
     white = (245, 245, 245)
@@ -98,8 +119,8 @@ def draw_projected_floor(frame: np.ndarray, H_world_to_image: np.ndarray) -> Non
     for y in [0.0, FLOOR_WIDTH_FT]:
         draw_projected_polyline(frame, H_world_to_image, line_points(CORNER_RADIUS_FT, y, FLOOR_LENGTH_FT - CORNER_RADIUS_FT, y), yellow, 2)
     draw_projected_polyline(frame, H_world_to_image, circle_points(100.0, 42.5, 11.0), white, 2)
-    draw_projected_polyline(frame, H_world_to_image, circle_points(12.0, 42.5, 9.25), white, 2)
-    draw_projected_polyline(frame, H_world_to_image, circle_points(188.0, 42.5, 9.25), white, 2)
+    draw_projected_crease(frame, H_world_to_image, 12.0, white)
+    draw_projected_crease(frame, H_world_to_image, 188.0, white)
     draw_projected_polyline(frame, H_world_to_image, line_points(12.0, 40.125, 12.0, 44.875, 8), red, 4)
     draw_projected_polyline(frame, H_world_to_image, line_points(188.0, 40.125, 188.0, 44.875, 8), red, 4)
     for point in [(100.0, 42.5), (42.5, 15.0), (42.5, 70.0), (157.5, 15.0), (157.5, 70.0)]:

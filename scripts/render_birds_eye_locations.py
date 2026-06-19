@@ -416,6 +416,41 @@ def draw_world_circle(img: np.ndarray, center: tuple[float, float], radius_ft: f
     cv2.circle(img, c, int(round(radius_ft * scale)), color, thickness, cv2.LINE_AA)
 
 
+def draw_world_arc(
+    img: np.ndarray,
+    center: tuple[float, float],
+    radius_ft: float,
+    start_deg: float,
+    stop_deg: float,
+    color: tuple[int, int, int],
+    thickness: int,
+    margin: int,
+) -> None:
+    points = []
+    for angle in np.linspace(start_deg, stop_deg, 80):
+        rad = np.deg2rad(angle)
+        x = center[0] + radius_ft * np.cos(rad)
+        y = center[1] + radius_ft * np.sin(rad)
+        points.append(world_to_canvas(float(x), float(y), img.shape[1], img.shape[0], margin))
+    cv2.polylines(img, [np.asarray(points, dtype=np.int32).reshape(-1, 1, 2)], False, color, thickness, cv2.LINE_AA)
+
+
+def draw_world_crease(img: np.ndarray, goal_x: float, color: tuple[int, int, int], thickness: int, margin: int) -> None:
+    radius = 9.25
+    lower = 42.5 - radius
+    upper = 42.5 + radius
+    if goal_x < FLOOR_LENGTH_FT / 2.0:
+        draw_world_arc(img, (goal_x, 42.5), radius, -90.0, 90.0, color, thickness, margin)
+        draw_world_line(img, (0.0, lower), (goal_x, lower), color, thickness, margin)
+        draw_world_line(img, (0.0, upper), (goal_x, upper), color, thickness, margin)
+        draw_world_line(img, (0.0, lower), (0.0, upper), color, thickness, margin)
+    else:
+        draw_world_arc(img, (goal_x, 42.5), radius, 90.0, 270.0, color, thickness, margin)
+        draw_world_line(img, (goal_x, lower), (FLOOR_LENGTH_FT, lower), color, thickness, margin)
+        draw_world_line(img, (goal_x, upper), (FLOOR_LENGTH_FT, upper), color, thickness, margin)
+        draw_world_line(img, (FLOOR_LENGTH_FT, lower), (FLOOR_LENGTH_FT, upper), color, thickness, margin)
+
+
 def draw_floor(width: int, height: int, margin: int) -> np.ndarray:
     img = np.full((height, width, 3), (28, 74, 54), dtype=np.uint8)
     boundary = poly_world_to_canvas(rounded_floor_points(), width, height, margin)
@@ -432,8 +467,8 @@ def draw_floor(width: int, height: int, margin: int) -> np.ndarray:
     for p in [(42.5, 15.0), (42.5, 70.0), (157.5, 15.0), (157.5, 70.0)]:
         cv2.circle(img, world_to_canvas(*p, width, height, margin), 4, white, -1, cv2.LINE_AA)
 
-    for center in [(12.0, 42.5), (188.0, 42.5)]:
-        draw_world_circle(img, center, 9.25, white, 2, margin)
+    draw_world_crease(img, 12.0, white, 2, margin)
+    draw_world_crease(img, 188.0, white, 2, margin)
     draw_world_line(img, (12.0, 40.125), (12.0, 44.875), red, 4, margin)
     draw_world_line(img, (188.0, 40.125), (188.0, 44.875), red, 4, margin)
 
