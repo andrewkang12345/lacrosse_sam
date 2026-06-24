@@ -28,6 +28,12 @@ FLOOR_FEATURE_OBJECTS = {
     "goal_crease": 4,
     "field_outline": 5,
 }
+TEXT_FEATURE_COLORS_BGR = {
+    "green_field": (80, 180, 100),
+    "green_boundary": (40, 240, 120),
+    "yellow_outline": (20, 220, 255),
+    "white_lines": (245, 245, 245),
+}
 
 
 def load_team_metadata(path: Path) -> dict[int, dict]:
@@ -71,6 +77,77 @@ def project_sam_body4d_mesh_to_image(vertices_ply: np.ndarray, focal_length: flo
 
 def sam_body4d_ply_to_camera(vertices_ply: np.ndarray) -> np.ndarray:
     return np.column_stack([vertices_ply[:, 0], -vertices_ply[:, 1], -vertices_ply[:, 2]]).astype(np.float64)
+
+
+def robust_camera_extent(vertices_camera: np.ndarray) -> float:
+    if len(vertices_camera) < 20:
+        return 0.0
+    lo = np.percentile(vertices_camera, 5.0, axis=0)
+    hi = np.percentile(vertices_camera, 95.0, axis=0)
+    extent = float(np.max(hi - lo))
+    return extent if np.isfinite(extent) and extent > 1e-8 else 0.0
+
+
+def compute_track_body_extents(mesh_root: Path) -> dict[int, float]:
+    output: dict[int, float] = {}
+    if not mesh_root.exists():
+        return output
+    for obj_dir in sorted(mesh_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else p.name):
+        if not obj_dir.is_dir() or not obj_dir.name.isdigit():
+            continue
+        extents = []
+        for mesh_path in sorted(obj_dir.glob("*.ply")):
+            try:
+                mesh = trimesh.load(mesh_path, process=False)
+            except Exception:
+                continue
+            vertices = np.asarray(mesh.vertices, dtype=np.float64)
+            if len(vertices):
+                extent = robust_camera_extent(sam_body4d_ply_to_camera(vertices))
+                if extent > 0:
+                    extents.append(extent)
+        if extents:
+            output[int(obj_dir.name)] = float(np.median(extents))
+    return output
+
+
+def compute_body_extent_targets(
+    track_extents: dict[int, float],
+    fixed_field_player_size: bool,
+    goalie_ids: set[int],
+    goalie_extent_threshold: float,
+) -> dict[int, float]:
+    if not fixed_field_player_size or not track_extents:
+        return track_extents
+    values = np.asarray([value for value in track_extents.values() if np.isfinite(value) and value > 0], dtype=np.float64)
+    if len(values) == 0:
+        return track_extents
+    field_extent = float(np.median(values))
+    threshold = field_extent * goalie_extent_threshold
+    targets = {}
+    exempt = set(goalie_ids)
+    for obj_id, extent in track_extents.items():
+        if obj_id in goalie_ids or extent >= threshold:
+            targets[obj_id] = extent
+            exempt.add(obj_id)
+        else:
+            targets[obj_id] = field_extent
+    print(
+        f"Using fixed field-player body extent={field_extent:.4f}; "
+        f"goalie/outlier exemptions={len(exempt)}; threshold={threshold:.4f}"
+    )
+    return targets
+
+
+def normalize_camera_vertices_to_track_extent(vertices_camera: np.ndarray, target_extent: float | None) -> tuple[np.ndarray, float]:
+    if target_extent is None or target_extent <= 0:
+        return vertices_camera, 1.0
+    current_extent = robust_camera_extent(vertices_camera)
+    if current_extent <= 0:
+        return vertices_camera, 1.0
+    ratio = float(np.clip(target_extent / current_extent, 0.72, 1.38))
+    center = np.median(vertices_camera, axis=0)
+    return (center[None, :] + ratio * (vertices_camera - center[None, :])).astype(np.float64), ratio
 
 
 def sample_world_points_with_indices(
@@ -151,6 +228,7 @@ def mesh_floor_points_from_vggt(
     H_plane_to_floor: np.ndarray,
     max_fit_vertices: int,
     max_render_vertices: int,
+    target_body_extent: float | None = None,
 ) -> tuple[np.ndarray, dict]:
     mesh = trimesh.load(mesh_path, process=False)
     vertices_ply = np.asarray(mesh.vertices, dtype=np.float64)
@@ -158,6 +236,7 @@ def mesh_floor_points_from_vggt(
         return np.zeros((0, 2), dtype=np.float64), {"fit_points": 0, "render_points": 0}
     focal_data = json.loads(focal_path.read_text())
     cam_vertices = sam_body4d_ply_to_camera(vertices_ply)
+    cam_vertices, body_extent_ratio = normalize_camera_vertices_to_track_extent(cam_vertices, target_body_extent)
     uv_all = project_sam_body4d_mesh_to_image(vertices_ply, float(focal_data["focal_length"]), image_shape)
     valid = np.isfinite(uv_all).all(axis=1)
     valid &= (uv_all[:, 0] >= 0) & (uv_all[:, 0] < image_shape[1]) & (uv_all[:, 1] >= 0) & (uv_all[:, 1] < image_shape[0])
@@ -191,7 +270,13 @@ def mesh_floor_points_from_vggt(
     valid_floor = np.isfinite(floor_xy).all(axis=1)
     valid_floor &= (floor_xy[:, 0] >= -5.0) & (floor_xy[:, 0] <= FLOOR_LENGTH_FT + 5.0)
     valid_floor &= (floor_xy[:, 1] >= -5.0) & (floor_xy[:, 1] <= FLOOR_WIDTH_FT + 5.0)
-    return floor_xy[valid_floor], {"fit_points": int(len(source_cam)), "render_points": int(valid_floor.sum()), "similarity_scale": float(similarity[0])}
+    return floor_xy[valid_floor], {
+        "fit_points": int(len(source_cam)),
+        "render_points": int(valid_floor.sum()),
+        "similarity_scale": float(similarity[0]),
+        "body_extent_ratio": float(body_extent_ratio),
+        "target_body_extent": float(target_body_extent) if target_body_extent is not None else 0.0,
+    }
 
 
 def load_floor_feature_masks(mask_dir: Path, frame_idx: int, shape: tuple[int, int]) -> dict[str, np.ndarray]:
@@ -211,6 +296,65 @@ def load_floor_feature_masks(mask_dir: Path, frame_idx: int, shape: tuple[int, i
             mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST).astype(bool)
         output[feature] = mask
     return output
+
+
+def load_union_mask(mask_dir: Path, frame_idx: int, shape: tuple[int, int]) -> np.ndarray:
+    height, width = shape
+    path = mask_dir / f"{frame_idx:08d}.npz"
+    if not path.exists():
+        return np.zeros((height, width), dtype=bool)
+    data = np.load(path)
+    masks = data["masks"].astype(bool)
+    if masks.size == 0:
+        return np.zeros((height, width), dtype=bool)
+    mask = masks.any(axis=0)
+    if mask.shape != (height, width):
+        mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST).astype(bool)
+    return mask
+
+
+def mask_boundary(mask: np.ndarray) -> np.ndarray:
+    if not mask.any():
+        return mask
+    kernel = np.ones((5, 5), dtype=np.uint8)
+    eroded = cv2.erode(mask.astype(np.uint8), kernel, iterations=1).astype(bool)
+    return mask & ~eroded
+
+
+def hsv_refine(frame_bgr: np.ndarray, mask: np.ndarray, kind: str) -> np.ndarray:
+    if not mask.any():
+        return mask
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    if kind == "green":
+        color = (hsv[:, :, 0] >= 35) & (hsv[:, :, 0] <= 95) & (hsv[:, :, 1] >= 35) & (hsv[:, :, 2] >= 35)
+    elif kind == "yellow":
+        color = (hsv[:, :, 0] >= 16) & (hsv[:, :, 0] <= 44) & (hsv[:, :, 1] >= 45) & (hsv[:, :, 2] >= 80)
+    elif kind == "white":
+        color = (hsv[:, :, 1] <= 70) & (hsv[:, :, 2] >= 145)
+    else:
+        return mask
+    refined = mask & color
+    return refined if refined.sum() >= max(50, 0.03 * mask.sum()) else mask
+
+
+def load_text_floor_feature_masks(
+    frame_bgr: np.ndarray,
+    frame_idx: int,
+    green_mask_dir: Path | None,
+    yellow_mask_dir: Path | None,
+    white_mask_dir: Path | None,
+) -> dict[str, np.ndarray]:
+    shape = frame_bgr.shape[:2]
+    output = {}
+    if green_mask_dir is not None:
+        green = hsv_refine(frame_bgr, load_union_mask(green_mask_dir, frame_idx, shape), "green")
+        output["green_field"] = green
+        output["green_boundary"] = mask_boundary(green)
+    if yellow_mask_dir is not None:
+        output["yellow_outline"] = hsv_refine(frame_bgr, load_union_mask(yellow_mask_dir, frame_idx, shape), "yellow")
+    if white_mask_dir is not None:
+        output["white_lines"] = hsv_refine(frame_bgr, load_union_mask(white_mask_dir, frame_idx, shape), "white")
+    return {name: mask for name, mask in output.items() if mask.any()}
 
 
 def project_floor_masks_to_floor(
@@ -310,6 +454,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mesh-root", default="outputs/meshes/sam_body4d/sam_body4d_transreid_3clusters_overlay/mesh_4d_individual")
     parser.add_argument("--focal-root", default="outputs/meshes/sam_body4d/sam_body4d_transreid_3clusters_overlay/focal_4d_individual")
     parser.add_argument("--floor-mask-dir", default="outputs/sam2/floor_features/sam2_floor_feature_instance_masks_with_outline")
+    parser.add_argument("--text-green-mask-dir", default="")
+    parser.add_argument("--text-yellow-mask-dir", default="")
+    parser.add_argument("--text-white-mask-dir", default="")
     parser.add_argument("--output-dir", default="outputs/vggt/sam_body4d_fused")
     parser.add_argument("--min-depth-conf", type=float, default=1.0)
     parser.add_argument("--bottom-quantile", type=float, default=0.90)
@@ -324,6 +471,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--margin", type=int, default=54)
     parser.add_argument("--trail-frames", type=int, default=12)
+    parser.add_argument("--fixed-field-player-size", action="store_true")
+    parser.add_argument("--goalie-object-ids", default="")
+    parser.add_argument("--goalie-extent-threshold", type=float, default=1.10)
     return parser.parse_args()
 
 
@@ -346,6 +496,20 @@ def main() -> None:
     mesh_root = Path(args.mesh_root)
     focal_root = Path(args.focal_root)
     floor_mask_dir = Path(args.floor_mask_dir)
+    text_green_mask_dir = Path(args.text_green_mask_dir) if args.text_green_mask_dir else None
+    text_yellow_mask_dir = Path(args.text_yellow_mask_dir) if args.text_yellow_mask_dir else None
+    text_white_mask_dir = Path(args.text_white_mask_dir) if args.text_white_mask_dir else None
+    use_text_masks = any(path is not None for path in [text_green_mask_dir, text_yellow_mask_dir, text_white_mask_dir])
+    track_body_extents = compute_track_body_extents(mesh_root)
+    if track_body_extents:
+        print(f"Using stable per-track SAM-Body4D body extents for {len(track_body_extents)} tracks")
+    goalie_ids = {int(item.strip()) for item in args.goalie_object_ids.split(",") if item.strip()}
+    body_extent_targets = compute_body_extent_targets(
+        track_body_extents,
+        fixed_field_player_size=args.fixed_field_player_size,
+        goalie_ids=goalie_ids,
+        goalie_extent_threshold=args.goalie_extent_threshold,
+    )
 
     output_frames = []
     mesh_frames = []
@@ -353,7 +517,10 @@ def main() -> None:
         frame = cv2.imread(str(frame_paths[frame_idx]), cv2.IMREAD_COLOR)
         if frame is None:
             continue
-        masks = load_floor_feature_masks(floor_mask_dir, frame_idx, frame.shape[:2])
+        if use_text_masks:
+            masks = load_text_floor_feature_masks(frame, frame_idx, text_green_mask_dir, text_yellow_mask_dir, text_white_mask_dir)
+        else:
+            masks = load_floor_feature_masks(floor_mask_dir, frame_idx, frame.shape[:2])
         feature_plane_uv = project_floor_masks_to_plane(
             masks,
             frame,
@@ -399,6 +566,7 @@ def main() -> None:
                 frame_H_plane_to_floor,
                 args.max_mesh_fit_vertices,
                 args.max_mesh_render_vertices,
+                body_extent_targets.get(obj_id),
             )
             foot_pixels = mesh_foot_pixels(mesh_path, focal_path, frame.shape[:2], args.bottom_quantile)
             pts3d, conf = sample_world_points(world_points[local_idx], depth_conf[local_idx], foot_pixels, frame.shape[:2], resolution, args.min_depth_conf)
@@ -467,7 +635,7 @@ def main() -> None:
         cv2.putText(canvas, f"SAM-Body4D meshes + SAM2 field masks frame {item['frame']}", (22, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (245, 245, 245), 2, cv2.LINE_AA)
         mask_counts = {}
         for feature, points in item["field_masks"].items():
-            color = FEATURE_COLORS_BGR.get(feature, (255, 255, 255))
+            color = TEXT_FEATURE_COLORS_BGR.get(feature, FEATURE_COLORS_BGR.get(feature, (255, 255, 255)))
             mask_counts[feature] = int(len(points))
             for x, y in points:
                 px, py = world_to_canvas(float(np.clip(x, 0.0, FLOOR_LENGTH_FT)), float(np.clip(y, 0.0, FLOOR_WIDTH_FT)), args.width, args.height, args.margin)

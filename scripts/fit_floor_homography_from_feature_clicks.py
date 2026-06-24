@@ -8,17 +8,18 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
-from render_birds_eye_locations import (
+from nll_field_geometry import (
     CORNER_RADIUS_FT,
     FLOOR_LENGTH_FT,
     FLOOR_WIDTH_FT,
+    goal_crease_samples,
+    line_points,
+    rounded_outline_samples,
+)
+from render_birds_eye_locations import (
     fit_homographies,
     nearest_fit,
 )
-
-
-def line_points(x1: float, y1: float, x2: float, y2: float, samples: int = 120) -> np.ndarray:
-    return np.column_stack([np.linspace(x1, x2, samples), np.linspace(y1, y2, samples)]).astype(np.float64)
 
 
 def arc_points(cx: float, cy: float, radius: float, start_deg: float, stop_deg: float, samples: int = 100) -> np.ndarray:
@@ -27,25 +28,13 @@ def arc_points(cx: float, cy: float, radius: float, start_deg: float, stop_deg: 
 
 
 def rounded_outline_samples(samples_per_segment: int = 140) -> np.ndarray:
-    r = CORNER_RADIUS_FT
-    parts = [
-        line_points(r, 0.0, FLOOR_LENGTH_FT - r, 0.0, samples_per_segment),
-        line_points(FLOOR_LENGTH_FT, r, FLOOR_LENGTH_FT, FLOOR_WIDTH_FT - r, samples_per_segment // 2),
-        line_points(FLOOR_LENGTH_FT - r, FLOOR_WIDTH_FT, r, FLOOR_WIDTH_FT, samples_per_segment),
-        line_points(0.0, FLOOR_WIDTH_FT - r, 0.0, r, samples_per_segment // 2),
-        arc_points(r, r, r, 180.0, 270.0, 80),
-        arc_points(FLOOR_LENGTH_FT - r, r, r, 270.0, 360.0, 80),
-        arc_points(FLOOR_LENGTH_FT - r, FLOOR_WIDTH_FT - r, r, 0.0, 90.0, 80),
-        arc_points(r, FLOOR_WIDTH_FT - r, r, 90.0, 180.0, 80),
-    ]
-    return np.concatenate(parts, axis=0)
+    from nll_field_geometry import rounded_outline_samples as shared_rounded_outline_samples
+
+    return shared_rounded_outline_samples(samples_per_segment=samples_per_segment)
 
 
 def crease_samples() -> np.ndarray:
-    radius = 9.25
-    left = arc_points(12.0, 42.5, radius, -90.0, 90.0, 160)
-    right = arc_points(188.0, 42.5, radius, 90.0, 270.0, 160)
-    return np.concatenate([left, right], axis=0).astype(np.float64)
+    return goal_crease_samples(arc_samples=180, chord_samples=60).astype(np.float64)
 
 
 def feature_samples() -> dict[str, np.ndarray]:
@@ -223,7 +212,7 @@ def main() -> None:
         "source_feature_clicks": args.feature_clicks,
         "source_initial_calibration": args.initial_calibration,
         "fit_method": "coarse_feature_distance_refinement",
-        "crease_model": "visible circular arc segment, mirrored at both goals",
+        "crease_model": "NLL 9 ft 3 in radius circle clipped by rear chord 1 ft behind the 4 ft 6 in goal base",
         "excluded_features": sorted(excluded_features),
         "reference_frame": args.reference_frame,
         "homographies": homographies,

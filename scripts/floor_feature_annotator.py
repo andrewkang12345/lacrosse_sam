@@ -27,11 +27,13 @@ FEATURES = [
         "id": "goal_crease",
         "label": "Goal crease",
         "color": "#f7d34a",
-        "description": "Click anywhere on either circular crease segment.",
+        "description": "Click anywhere on either NLL crease outline.",
         "world": {
-            "type": "crease_pair",
+            "type": "nll_crease_pair",
             "centers": [[12.0, 42.5], [188.0, 42.5]],
             "radius": 9.25,
+            "rear_goal_base_ft": 4.5,
+            "straight_chord_behind_goal_base_ft": 1.0,
         },
     },
     {

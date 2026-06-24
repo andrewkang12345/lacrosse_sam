@@ -17,6 +17,8 @@ Source video:
 data/lacrosse_long_source_iniyaa.mp4
 ```
 
+Source videos, extracted frames, SMPL model files, checkpoints, third-party repos, and generated outputs are local-only and ignored by Git. Put those assets under `data/`, `checkpoints/`, and `third_party/` before running the scripts.
+
 The workflow samples the first 10 seconds at 10 fps into:
 
 ```bash
@@ -35,6 +37,8 @@ Generated artifacts under `outputs/` are now grouped by workflow stage:
 - `outputs/birds_eye/`, `outputs/overlays/camera/`, `outputs/debug/`, `outputs/vggt/`
 
 The older flat paths shown in historical command examples may need to be replaced with the corresponding grouped path.
+
+See `outputs/README.md` and `outputs/CURRENT_ARTIFACTS.json` for the latest local artifact index. Large files under `outputs/` are intentionally not tracked.
 
 ## Setup
 
@@ -521,6 +525,12 @@ Current VGGT outputs:
 outputs/vggt/birds_eye_full/birds_eye_player_locations_vggt_h264.mp4
 outputs/vggt/birds_eye_full/birds_eye_player_locations_vggt.json
 outputs/vggt/birds_eye_full/vggt_predictions_compact.npz
+```
+
+The latest Week 1 VGGT/SAM-Body4D stack is indexed in:
+
+```bash
+outputs/CURRENT_ARTIFACTS.json
 ```
 
 ## Output Video Format

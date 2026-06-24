@@ -9,10 +9,16 @@ import cv2
 import imageio.v2 as imageio
 import numpy as np
 
+from nll_field_geometry import (
+    CENTER_Y_FT,
+    CORNER_RADIUS_FT,
+    FLOOR_LENGTH_FT,
+    FLOOR_WIDTH_FT,
+    dense_floor_model,
+    goal_crease_segments,
+    rounded_floor_points,
+)
 
-FLOOR_LENGTH_FT = 200.0
-FLOOR_WIDTH_FT = 85.0
-CORNER_RADIUS_FT = 22.667
 DEFAULT_COLORS = [
     [255, 80, 40],
     [70, 170, 255],
@@ -42,11 +48,7 @@ LANDMARK_WORLD_POINTS = [
     (188.0, 40.125),
     (188.0, 44.875),
     (21.25, 42.5),
-    (12.0, 33.25),
-    (12.0, 51.75),
     (178.75, 42.5),
-    (188.0, 33.25),
-    (188.0, 51.75),
     (42.5, 15.0),
     (42.5, 70.0),
     (157.5, 15.0),
@@ -58,6 +60,9 @@ LANDMARK_WORLD_POINTS = [
     (0.0, 42.5),
     (200.0, 42.5),
 ]
+for _goal_x in (12.0, 188.0):
+    for _segment in goal_crease_segments(_goal_x, arc_samples=5, chord_samples=2):
+        LANDMARK_WORLD_POINTS.extend((float(x), float(y)) for x, y in _segment)
 
 
 @dataclass
@@ -186,23 +191,6 @@ def fit_homographies(calibration: dict, ransac_threshold_ft: float) -> list[Homo
     if not fits:
         raise RuntimeError("No usable homography fits. Add at least 4 floor landmark clicks on one frame.")
     return fits
-
-
-def dense_floor_model(step_ft: float = 4.0) -> np.ndarray:
-    points: list[tuple[float, float]] = list(LANDMARK_WORLD_POINTS)
-    for x in [12.0, 57.5, 100.0, 142.5, 188.0]:
-        for y in np.arange(0.0, FLOOR_WIDTH_FT + 0.001, step_ft):
-            points.append((x, float(y)))
-    for y in [0.0, 85.0]:
-        for x in np.arange(CORNER_RADIUS_FT, FLOOR_LENGTH_FT - CORNER_RADIUS_FT + 0.001, step_ft):
-            points.append((float(x), y))
-    for cx, cy, radius in [(100.0, 42.5, 11.0), (12.0, 42.5, 9.25), (188.0, 42.5, 9.25)]:
-        for angle in np.linspace(0.0, 2.0 * np.pi, 48, endpoint=False):
-            points.append((float(cx + radius * np.cos(angle)), float(cy + radius * np.sin(angle))))
-    boundary = rounded_floor_points(samples_per_corner=28)
-    points.extend((float(x), float(y)) for x, y in boundary)
-    unique = sorted({(round(x, 3), round(y, 3)) for x, y in points})
-    return np.asarray(unique, dtype=np.float32)
 
 
 def homography_ok(H: np.ndarray) -> bool:
@@ -384,22 +372,6 @@ def world_to_canvas(x: float, y: float, width: int, height: int, margin: int) ->
     return int(round(px)), int(round(py))
 
 
-def rounded_floor_points(samples_per_corner: int = 24) -> np.ndarray:
-    r = CORNER_RADIUS_FT
-    centers = [
-        (r, r, 180, 270),
-        (FLOOR_LENGTH_FT - r, r, 270, 360),
-        (FLOOR_LENGTH_FT - r, FLOOR_WIDTH_FT - r, 0, 90),
-        (r, FLOOR_WIDTH_FT - r, 90, 180),
-    ]
-    pts = []
-    for cx, cy, start, stop in centers:
-        for angle in np.linspace(start, stop, samples_per_corner):
-            rad = np.deg2rad(angle)
-            pts.append((cx + r * np.cos(rad), cy + r * np.sin(rad)))
-    return np.asarray(pts, dtype=np.float32)
-
-
 def poly_world_to_canvas(points: np.ndarray, width: int, height: int, margin: int) -> np.ndarray:
     return np.asarray([world_to_canvas(float(x), float(y), width, height, margin) for x, y in points], dtype=np.int32)
 
@@ -436,11 +408,9 @@ def draw_world_arc(
 
 
 def draw_world_crease(img: np.ndarray, goal_x: float, color: tuple[int, int, int], thickness: int, margin: int) -> None:
-    radius = 9.25
-    if goal_x < FLOOR_LENGTH_FT / 2.0:
-        draw_world_arc(img, (goal_x, 42.5), radius, -90.0, 90.0, color, thickness, margin)
-    else:
-        draw_world_arc(img, (goal_x, 42.5), radius, 90.0, 270.0, color, thickness, margin)
+    for segment in goal_crease_segments(goal_x):
+        pixels = poly_world_to_canvas(segment, img.shape[1], img.shape[0], margin)
+        cv2.polylines(img, [pixels.reshape(-1, 1, 2)], False, color, thickness, cv2.LINE_AA)
 
 
 def draw_floor(width: int, height: int, margin: int) -> np.ndarray:

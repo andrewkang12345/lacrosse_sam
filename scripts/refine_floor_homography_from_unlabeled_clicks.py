@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
+from nll_field_geometry import circle_points, goal_crease_samples, line_points
 from render_birds_eye_locations import (
     CORNER_RADIUS_FT,
     FLOOR_LENGTH_FT,
@@ -17,15 +18,6 @@ from render_birds_eye_locations import (
 )
 
 
-def line_points(x1: float, y1: float, x2: float, y2: float, samples: int = 100) -> np.ndarray:
-    return np.column_stack([np.linspace(x1, x2, samples), np.linspace(y1, y2, samples)]).astype(np.float64)
-
-
-def circle_points(cx: float, cy: float, radius: float, samples: int = 160) -> np.ndarray:
-    angles = np.linspace(0.0, 2.0 * np.pi, samples, endpoint=False)
-    return np.column_stack([cx + radius * np.cos(angles), cy + radius * np.sin(angles)]).astype(np.float64)
-
-
 def floor_feature_samples() -> np.ndarray:
     points: list[np.ndarray] = []
     points.append(rounded_floor_points(samples_per_corner=64).astype(np.float64))
@@ -33,8 +25,8 @@ def floor_feature_samples() -> np.ndarray:
         points.append(line_points(CORNER_RADIUS_FT, y, FLOOR_LENGTH_FT - CORNER_RADIUS_FT, y, samples=220))
     for x in [12.0, 57.5, 100.0, 142.5, 188.0]:
         points.append(line_points(x, 0.0, x, FLOOR_WIDTH_FT, samples=140))
-    for cx, cy, radius in [(100.0, 42.5, 11.0), (12.0, 42.5, 9.25), (188.0, 42.5, 9.25)]:
-        points.append(circle_points(cx, cy, radius, samples=180))
+    points.append(circle_points(100.0, 42.5, 11.0, samples=180))
+    points.append(goal_crease_samples(arc_samples=180, chord_samples=60))
     for x in [12.0, 188.0]:
         points.append(line_points(x, 40.125, x, 44.875, samples=24))
     for x, y in [(100.0, 42.5), (42.5, 15.0), (42.5, 70.0), (157.5, 15.0), (157.5, 70.0)]:

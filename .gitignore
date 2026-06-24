@@ -1,11 +1,22 @@
-# Generated media and model outputs
-outputs/
+# Generated media and model outputs. Keep only lightweight manifests/docs.
+outputs/**
+!outputs/
+!outputs/README.md
+!outputs/CURRENT_ARTIFACTS.json
 checkpoints/
 third_party/
 
-# Local model/data downloads
+# Local model/data downloads and generated clips/frames
 data/SMPL_python_v.1.1.0/
 data/SMPL_python_v.1.1.0*.zip
+data/Week 1/
+data/Week 1.zip
+data/frames_*/
+data/week1_*_frames_*/
+data/*.mp4
+data/**/*.mp4
+data/*.zip
+data/**/*.zip
 
 # Python/runtime caches
 __pycache__/

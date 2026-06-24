@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from scipy.spatial import cKDTree
 
+from nll_field_geometry import goal_crease_side_samples
 from fit_floor_homography_from_feature_clicks import (
     feature_residual,
     feature_samples,
@@ -31,16 +32,8 @@ AUTO_FEATURES = {
 }
 
 
-def arc_points(cx: float, cy: float, radius: float, start_deg: float, stop_deg: float, samples: int = 120) -> np.ndarray:
-    angles = np.deg2rad(np.linspace(start_deg, stop_deg, samples))
-    return np.column_stack([cx + radius * np.cos(angles), cy + radius * np.sin(angles)]).astype(np.float64)
-
-
 def crease_side_samples() -> dict[str, np.ndarray]:
-    return {
-        "left": arc_points(12.0, 42.5, 9.25, -90.0, 90.0, 160),
-        "right": arc_points(188.0, 42.5, 9.25, 90.0, 270.0, 160),
-    }
+    return goal_crease_side_samples(arc_samples=180, chord_samples=60)
 
 
 def parse_mask_source(value: str) -> tuple[str, Path, int | None]:

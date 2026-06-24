@@ -13,7 +13,8 @@ import torch.nn.functional as F
 from scipy.optimize import least_squares
 from scipy.spatial import cKDTree
 
-from fit_floor_homography_from_feature_clicks import arc_points, feature_samples
+from fit_floor_homography_from_feature_clicks import feature_samples
+from nll_field_geometry import goal_crease_samples
 from render_birds_eye_locations import (
     FLOOR_LENGTH_FT,
     FLOOR_WIDTH_FT,
@@ -167,9 +168,7 @@ def outline_samples() -> np.ndarray:
 
 
 def crease_samples() -> np.ndarray:
-    left = arc_points(12.0, 42.5, 9.25, -90.0, 90.0, 160)
-    right = arc_points(188.0, 42.5, 9.25, 90.0, 270.0, 160)
-    return np.concatenate([left, right], axis=0).astype(np.float64)
+    return goal_crease_samples(arc_samples=180, chord_samples=60).astype(np.float64)
 
 
 def homography_from_bbox(uv: np.ndarray, flip_x: bool, flip_y: bool, swap: bool) -> np.ndarray:

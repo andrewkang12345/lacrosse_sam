@@ -23,11 +23,11 @@ LANDMARKS = [
     {"id": "right_goal_lower_post", "label": "Right goal lower post", "x": 188.0, "y": 40.125},
     {"id": "right_goal_upper_post", "label": "Right goal upper post", "x": 188.0, "y": 44.875},
     {"id": "left_crease_front", "label": "Left crease front", "x": 21.25, "y": 42.5},
-    {"id": "left_crease_lower", "label": "Left crease lower edge", "x": 12.0, "y": 33.25},
-    {"id": "left_crease_upper", "label": "Left crease upper edge", "x": 12.0, "y": 51.75},
+    {"id": "left_crease_lower_chord", "label": "Left crease lower chord end", "x": 6.5, "y": 35.062},
+    {"id": "left_crease_upper_chord", "label": "Left crease upper chord end", "x": 6.5, "y": 49.938},
     {"id": "right_crease_front", "label": "Right crease front", "x": 178.75, "y": 42.5},
-    {"id": "right_crease_lower", "label": "Right crease lower edge", "x": 188.0, "y": 33.25},
-    {"id": "right_crease_upper", "label": "Right crease upper edge", "x": 188.0, "y": 51.75},
+    {"id": "right_crease_lower_chord", "label": "Right crease lower chord end", "x": 193.5, "y": 35.062},
+    {"id": "right_crease_upper_chord", "label": "Right crease upper chord end", "x": 193.5, "y": 49.938},
     {"id": "left_lower_faceoff", "label": "Left lower face-off dot", "x": 42.5, "y": 15.0},
     {"id": "left_upper_faceoff", "label": "Left upper face-off dot", "x": 42.5, "y": 70.0},
     {"id": "right_lower_faceoff", "label": "Right lower face-off dot", "x": 157.5, "y": 15.0},
@@ -38,6 +38,13 @@ LANDMARKS = [
     {"id": "upper_right_tangent", "label": "Yellow boundary upper-right tangent", "x": 177.333, "y": 85.0},
     {"id": "left_mid_board", "label": "Left end-board midpoint", "x": 0.0, "y": 42.5},
     {"id": "right_mid_board", "label": "Right end-board midpoint", "x": 200.0, "y": 42.5},
+]
+
+FACEOFF_CORNER_LANDMARKS = [
+    {"id": "left_upper", "label": "Left upper face-off point", "x": 42.5, "y": 70.0},
+    {"id": "right_upper", "label": "Right upper face-off point", "x": 157.5, "y": 70.0},
+    {"id": "left_lower", "label": "Left lower face-off point", "x": 42.5, "y": 15.0},
+    {"id": "right_lower", "label": "Right lower face-off point", "x": 157.5, "y": 15.0},
 ]
 
 
@@ -222,6 +229,7 @@ HTML = """<!doctype html>
 
 class FloorAnnotatorHandler(BaseHTTPRequestHandler):
     frames: list[dict] = []
+    landmarks: list[dict] = LANDMARKS
     frames_dir: Path
     output_path: Path
     width: int
@@ -249,7 +257,7 @@ class FloorAnnotatorHandler(BaseHTTPRequestHandler):
                 HTML.replace("__FRAMES__", json.dumps(self.frames))
                 .replace("__WIDTH__", str(self.width))
                 .replace("__HEIGHT__", str(self.height))
-                .replace("__LANDMARKS__", json.dumps(LANDMARKS))
+                .replace("__LANDMARKS__", json.dumps(self.landmarks))
                 .replace("__CLICKS__", json.dumps(clicks))
             )
             body = html.encode("utf-8")
@@ -307,7 +315,7 @@ class FloorAnnotatorHandler(BaseHTTPRequestHandler):
                 "width_ft": 85.0,
                 "corner_radius_ft": 22.667,
             },
-            "landmarks": LANDMARKS,
+            "landmarks": self.landmarks,
             "clicks": clicks,
         }
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,6 +328,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", default="outputs/prompt_frames/manifest.json")
     parser.add_argument("--frames-dir", default="data/frames_10fps")
     parser.add_argument("--output", default="outputs/floor_homography_clicks.json")
+    parser.add_argument("--landmark-set", choices=["all", "faceoff_corners"], default="all")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8770)
     return parser.parse_args()
@@ -330,6 +339,7 @@ def main() -> None:
     manifest = json.loads(Path(args.manifest).read_text())
     handler = FloorAnnotatorHandler
     handler.frames = manifest["frames"]
+    handler.landmarks = FACEOFF_CORNER_LANDMARKS if args.landmark_set == "faceoff_corners" else LANDMARKS
     handler.width = int(manifest["width"])
     handler.height = int(manifest["height"])
     handler.frames_dir = Path(args.frames_dir)

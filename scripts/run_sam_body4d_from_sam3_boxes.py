@@ -151,6 +151,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--render-mode", choices=["overlay", "white"], default="overlay")
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--score-threshold", type=float, default=0.0)
+    parser.add_argument("--max-detections-per-frame", type=int, default=0)
     return parser.parse_args()
 
 
@@ -202,11 +204,20 @@ def main() -> None:
         height, width = img.shape[:2]
         ids = [int(v) for v in record.get("object_ids", [])]
         boxes = np.asarray(record.get("boxes", []), dtype=np.float32)
+        scores = np.asarray(record.get("scores", [1.0] * len(ids)), dtype=np.float32)
         valid = []
         for i, box in enumerate(boxes):
             x1, y1, x2, y2 = box
-            if x2 - x1 >= 8 and y2 - y1 >= 16:
+            if x2 - x1 >= 8 and y2 - y1 >= 16 and (i >= len(scores) or scores[i] >= args.score_threshold):
                 valid.append(i)
+        if args.max_detections_per_frame and len(valid) > args.max_detections_per_frame:
+            areas = []
+            for i in valid:
+                x1, y1, x2, y2 = boxes[i]
+                score = float(scores[i]) if i < len(scores) else 1.0
+                areas.append((float((x2 - x1) * (y2 - y1)) * max(score, 0.05), i))
+            valid = [i for _, i in sorted(areas, reverse=True)[: args.max_detections_per_frame]]
+            valid.sort()
         ids = [ids[i] for i in valid]
         boxes = boxes[valid] if len(valid) else np.zeros((0, 4), dtype=np.float32)
         colors = [frame_colors(record, [int(v) for v in record.get("object_ids", [])])[i] for i in valid]

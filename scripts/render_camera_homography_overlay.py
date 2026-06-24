@@ -19,6 +19,7 @@ from render_birds_eye_locations import (
     rounded_floor_points,
     transform_point,
 )
+from nll_field_geometry import goal_crease_segments
 
 
 FEATURE_COLORS_BGR = {
@@ -92,11 +93,8 @@ def arc_points(cx: float, cy: float, radius: float, start_deg: float, stop_deg: 
 
 
 def draw_projected_crease(frame: np.ndarray, H_world_to_image: np.ndarray, goal_x: float, color: tuple[int, int, int]) -> None:
-    radius = 9.25
-    if goal_x < FLOOR_LENGTH_FT / 2.0:
-        draw_projected_polyline(frame, H_world_to_image, arc_points(goal_x, 42.5, radius, -90.0, 90.0), color, 2)
-    else:
-        draw_projected_polyline(frame, H_world_to_image, arc_points(goal_x, 42.5, radius, 90.0, 270.0), color, 2)
+    for segment in goal_crease_segments(goal_x, arc_samples=120, chord_samples=48):
+        draw_projected_polyline(frame, H_world_to_image, segment.astype(np.float32), color, 2)
 
 
 def draw_projected_floor(frame: np.ndarray, H_world_to_image: np.ndarray) -> None:

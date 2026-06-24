@@ -1,0 +1,36 @@
+{
+  "schema": "lacrosse_sam_current_artifacts_v1",
+  "current_stack": "week1_112825_osh_tor_0820_1053_all_players_undistorted_anchored",
+  "notes": [
+    "Generated media, model checkpoints, third-party repositories, SMPL assets, frames, and source videos are local-only and ignored by Git.",
+    "All SAM3 detections for the text prompt 'player' are retained, including substitute players visible in the broadcast.",
+    "VGGT, SAM3 field masks, and SAM-Body4D player meshes use undistorted Week 1 frames.",
+    "The field fit uses partial-green fitting plus huddle and goalie anchors; player meshes are not force-grounded to the synthetic field in this stack.",
+    "The 10 fps bird's-eye videos are rendered at the SAM-Body4D overlay frame rate from the available VGGT/SAM3 frame estimates."
+  ],
+  "data": {
+    "source_video": "data/Week 1/112825_osh_tor.mp4",
+    "undistorted_frames_1fps": "data/week1_112825_osh_tor_0820_1053_frames_1fps_undistorted"
+  },
+  "vggt": {
+    "predictions": "outputs/vggt/week1_112825_osh_tor_0820_1053_vggt_1fps_undistorted/vggt_predictions_compact.npz",
+    "field_fit": "outputs/vggt/week1_112825_osh_tor_0820_1053_sam3_text_field_fit_undistorted_partial_green_anchors/field_fit_vggt_sam3_text_masks_huddle_goalies.json",
+    "viewer_pid": "outputs/vggt/interactive/vggt_week1_sam3_text_field_sambody4d_viewer.pid",
+    "viewer_log": "outputs/vggt/interactive/vggt_week1_sam3_text_field_sambody4d_viewer.log"
+  },
+  "sam3": {
+    "player_instance_masks": "outputs/sam3/week1_112825_osh_tor_0820_1053_1fps_undistorted/player_instance_masks_chunked",
+    "green_field_masks": "outputs/sam3/week1_112825_osh_tor_0820_1053_1fps_undistorted/green_field_instance_masks_chunked",
+    "white_line_masks": "outputs/sam3/week1_112825_osh_tor_0820_1053_1fps_undistorted/white_lines_instance_masks_chunked",
+    "yellow_outline_masks": "outputs/sam3/week1_112825_osh_tor_0820_1053_1fps_undistorted/yellow_outline_instance_masks_chunked"
+  },
+  "sam_body4d": {
+    "mesh_dir": "outputs/meshes/sam_body4d/week1_112825_osh_tor_0820_1053_sam3_text_player_all_undistorted/mesh_4d_individual",
+    "focal_dir": "outputs/meshes/sam_body4d/week1_112825_osh_tor_0820_1053_sam3_text_player_all_undistorted/focal_4d_individual",
+    "camera_overlay_h264": "outputs/meshes/sam_body4d/week1_112825_osh_tor_0820_1053_sam3_text_player_all_undistorted_h264.mp4"
+  },
+  "renders": {
+    "birds_eye_meshes_and_field_masks_h264": "outputs/vggt/week1_112825_osh_tor_0820_1053_sam3_text_sam_body4d_fused_all_players_undistorted_anchors_10fps/birds_eye_sam_body4d_meshes_and_field_masks_vggt_h264.mp4",
+    "birds_eye_player_locations_h264": "outputs/vggt/week1_112825_osh_tor_0820_1053_sam3_text_sam_body4d_fused_all_players_undistorted_anchors_10fps/birds_eye_player_locations_sam_body4d_vggt_h264.mp4"
+  }
+}
