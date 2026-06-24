@@ -40,6 +40,26 @@ The older flat paths shown in historical command examples may need to be replace
 
 See `outputs/README.md` and `outputs/CURRENT_ARTIFACTS.json` for the latest local artifact index. Large files under `outputs/` are intentionally not tracked.
 
+## How The VGGT + SAM3 + SAM-Body4D Stack Works
+
+This stack combines three separate estimates into one 3D view of the play:
+
+- `SAM3` finds semantic regions in the broadcast frames from text prompts. In the current Week 1 workflow, it is used for `player`, `green field`, `white lines on green field`, and `yellow outline around field border`. The player masks define which image pixels belong to each detected person; the field masks define which VGGT points should be treated as floor or field-landmark evidence.
+- `VGGT` predicts camera intrinsics, camera poses, depth, and a 3D point cloud from the video frames. Those predictions let the scripts lift SAM3 mask pixels out of 2D image space into VGGT's 3D reconstruction space.
+- `SAM-Body4D` reconstructs one animated human mesh per SAM3 player detection track. The mesh outputs are kept in their own local coordinate systems first, then transformed into the VGGT scene for visualization.
+
+The field fitting step uses SAM3 field masks projected into the VGGT point cloud to estimate the floor plane and align a rigid 200 ft x 85 ft NLL synthetic field to that plane. The fit is constrained to preserve the field shape; it should translate, rotate, and uniformly scale the synthetic layout, not stretch it into a new geometry. Extra anchors, such as goalie locations near the goal and huddled players near center, can help stabilize the alignment when the broadcast reconstruction is incomplete.
+
+The mesh fusion step places each SAM-Body4D human on the corresponding VGGT player blob by matching the SAM3 player mask to nearby VGGT 3D points. The current all-player Week 1 path keeps every SAM3 `player` detection, including substitutes visible near the boards. For that clip, the meshes are not forcibly grounded to the synthetic field because that introduced offsets; instead, the placement follows the player blob in VGGT space, with a fixed field-player body scale and a separate goalie allowance.
+
+The main outputs to inspect are:
+
+```bash
+outputs/vggt/interactive/
+outputs/vggt/week1_112825_osh_tor_0820_1053_sam3_text_sam_body4d_fused_all_players_undistorted_anchors_10fps/
+outputs/meshes/sam_body4d/week1_112825_osh_tor_0820_1053_sam3_text_player_all_undistorted_h264.mp4
+```
+
 ## Setup
 
 Run from the repo root:
