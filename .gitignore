@@ -2,7 +2,6 @@
 outputs/**
 !outputs/
 !outputs/README.md
-!outputs/CURRENT_ARTIFACTS.json
 checkpoints/
 third_party/
 

@@ -36,9 +36,7 @@ Generated artifacts under `outputs/` are now grouped by workflow stage:
 - `outputs/floor/clicks/`, `outputs/floor/sam2_prompts/`, `outputs/floor/calibrations/`
 - `outputs/birds_eye/`, `outputs/overlays/camera/`, `outputs/debug/`, `outputs/vggt/`
 
-The older flat paths shown in historical command examples may need to be replaced with the corresponding grouped path.
-
-See `outputs/README.md` and `outputs/CURRENT_ARTIFACTS.json` for the latest local artifact index. Large files under `outputs/` are intentionally not tracked.
+The older flat paths shown in historical command examples may need to be replaced with the corresponding grouped path. Large files under `outputs/` are intentionally not tracked.
 
 ## How The VGGT + SAM3 + SAM-Body4D Stack Works
 
@@ -50,15 +48,9 @@ This stack combines three separate estimates into one 3D view of the play:
 
 The field fitting step uses SAM3 field masks projected into the VGGT point cloud to estimate the floor plane and align a rigid 200 ft x 85 ft NLL synthetic field to that plane. The fit is constrained to preserve the field shape; it should translate, rotate, and uniformly scale the synthetic layout, not stretch it into a new geometry. Extra anchors, such as goalie locations near the goal and huddled players near center, can help stabilize the alignment when the broadcast reconstruction is incomplete.
 
-The mesh fusion step places each SAM-Body4D human on the corresponding VGGT player blob by matching the SAM3 player mask to nearby VGGT 3D points. The current all-player Week 1 path keeps every SAM3 `player` detection, including substitutes visible near the boards. For that clip, the meshes are not forcibly grounded to the synthetic field because that introduced offsets; instead, the placement follows the player blob in VGGT space, with a fixed field-player body scale and a separate goalie allowance.
+The mesh fusion step places each SAM-Body4D human on the corresponding VGGT player blob by matching the SAM3 player mask to nearby VGGT 3D points. The all-player path keeps every SAM3 `player` detection, including substitutes visible near the boards. If field grounding introduces offsets, use `--no-ground-meshes-to-field` so placement follows the player blob in VGGT space instead.
 
-The main outputs to inspect are:
-
-```bash
-outputs/vggt/interactive/
-outputs/vggt/week1_112825_osh_tor_0820_1053_sam3_text_sam_body4d_fused_all_players_undistorted_anchors_10fps/
-outputs/meshes/sam_body4d/week1_112825_osh_tor_0820_1053_sam3_text_player_all_undistorted_h264.mp4
-```
+The commands in the VGGT section below produce both an interactive `viser` scene and H.264 review videos from local input assets.
 
 ## Setup
 
@@ -517,41 +509,144 @@ python scripts/render_birds_eye_locations.py \
 
 The primitive SAM2 landmark pass fits image-space line primitives and visible line segments directly from SAM2 masks, filters the outline mask to the yellow lower rink envelope, and fits the visible crease as an arc segment. `primitive_full_homography` refines the full projective transform when multiple primitives are visible; frames with only one line use a bounded line-specific correction. `--draw-landmark-masks` overlays the SAM2 camera-space floor landmark segmentations on the camera video; `--draw-landmark-mask-points` projects sampled SAM2 landmark-mask pixels onto the top-down floor view.
 
-## 10. VGGT Bird's-Eye Coordinates
+## 10. VGGT + SAM3 + SAM-Body4D Visualization
 
-The VGGT path estimates camera intrinsics/extrinsics/depth from the clip, unprojects SAM2 floor-landmark masks and SAM3 player masks into VGGT's 3D world, fits a floor plane, aligns that plane to the 200 ft x 85 ft rink model, and renders player dots from VGGT-derived floor-contact points:
+This is the reproducible path for the 3D visualization. It uses SAM3 text masks for players and field evidence, VGGT for camera/depth reconstruction, SAM-Body4D for human meshes, then opens a `viser` scene with the VGGT point cloud, fitted synthetic field, and fitted human meshes.
+
+Install the external repos locally:
 
 ```bash
 git clone https://github.com/facebookresearch/vggt third_party/VGGT
+git clone https://github.com/gaomingqi/sam-body4d third_party/sam-body4d
 python -m pip install -r third_party/VGGT/requirements.txt
+```
 
-python scripts/run_vggt_birds_eye.py \
+Prepare a short frame directory from a local source video. One frame per second is a good first pass because VGGT and SAM-Body4D are expensive:
+
+```bash
+mkdir -p data/vggt_sam_demo_frames_1fps
+ffmpeg -ss 00:08:20 -to 00:10:53 \
+  -i "data/Week 1/112825_osh_tor.mp4" \
+  -vf fps=1 \
+  data/vggt_sam_demo_frames_1fps/frame_%05d.jpg
+
+export FRAMES=data/vggt_sam_demo_frames_1fps
+export RUN=outputs/vggt_sam_demo
+export HF_TOKEN='your_huggingface_token'
+```
+
+Run SAM3 text tracking. The `player` masks drive SAM-Body4D; the field masks drive field-plane fitting:
+
+```bash
+HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
+  --frames-dir "$FRAMES" \
+  --text 'player' \
+  --output "$RUN/sam3/player.mp4" \
+  --mask-dir "$RUN/sam3/player_label_masks" \
+  --instance-mask-dir "$RUN/sam3/player_instance_masks" \
+  --fps 1
+
+HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
+  --frames-dir "$FRAMES" \
+  --text 'green field' \
+  --output "$RUN/sam3/green_field.mp4" \
+  --mask-dir "$RUN/sam3/green_field_label_masks" \
+  --instance-mask-dir "$RUN/sam3/green_field_instance_masks" \
+  --fps 1
+
+HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
+  --frames-dir "$FRAMES" \
+  --text 'white lines on green field' \
+  --output "$RUN/sam3/white_lines.mp4" \
+  --mask-dir "$RUN/sam3/white_lines_label_masks" \
+  --instance-mask-dir "$RUN/sam3/white_lines_instance_masks" \
+  --fps 1
+
+HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
+  --frames-dir "$FRAMES" \
+  --text 'yellow outline around field border' \
+  --output "$RUN/sam3/yellow_outline.mp4" \
+  --mask-dir "$RUN/sam3/yellow_outline_label_masks" \
+  --instance-mask-dir "$RUN/sam3/yellow_outline_instance_masks" \
+  --fps 1
+```
+
+Run VGGT on the same frames:
+
+```bash
+python scripts/run_vggt_reconstruction_clip.py \
   --vggt-repo third_party/VGGT \
-  --frames-dir data/frames_10fps \
-  --sam3-json outputs/sam3/team_classification/sam3_team_transreid_3clusters_detections.json \
-  --player-mask-dir outputs/sam3/text/sam3_text_player_instance_masks \
-  --floor-mask-dir outputs/sam2/floor_features/sam2_floor_feature_instance_masks_with_outline \
-  --output-dir outputs/vggt/birds_eye_full \
-  --max-frames 100 \
+  --frames-dir "$FRAMES" \
+  --output-dir "$RUN/vggt" \
+  --max-frames 180
+```
+
+Fit the rigid synthetic NLL field to the SAM3 field masks lifted into VGGT 3D space:
+
+```bash
+python scripts/fit_vggt_field_from_sam3_text_masks.py \
+  --vggt-repo third_party/VGGT \
+  --vggt-npz "$RUN/vggt/vggt_predictions_compact.npz" \
+  --frames-dir "$FRAMES" \
+  --white-mask-dir "$RUN/sam3/white_lines_instance_masks" \
+  --yellow-mask-dir "$RUN/sam3/yellow_outline_instance_masks" \
+  --green-mask-dir "$RUN/sam3/green_field_instance_masks" \
+  --output-dir "$RUN/field_fit" \
+  --min-depth-conf-percentile 20 \
+  --fps 1
+```
+
+Run SAM-Body4D from the SAM3 `player` boxes:
+
+```bash
+PYOPENGL_PLATFORM=egl python scripts/run_sam_body4d_from_sam3_boxes.py \
+  --repo-root third_party/sam-body4d \
+  --config third_party/sam-body4d/configs/body4d.yaml \
+  --frames-dir "$FRAMES" \
+  --sam3-json "$RUN/sam3/player.json" \
+  --output-dir "$RUN/sam_body4d" \
+  --output-video "$RUN/sam_body4d_overlay_h264.mp4" \
+  --render-mode overlay \
+  --fps 1
+```
+
+Render top-down H.264 review videos with SAM-Body4D mesh points and SAM3 field-mask points:
+
+```bash
+python scripts/render_sam_body4d_vggt_birds_eye.py \
+  --vggt-repo third_party/VGGT \
+  --vggt-json "$RUN/field_fit/field_fit_vggt_sam3_text_masks.json" \
+  --vggt-npz "$RUN/vggt/vggt_predictions_compact.npz" \
+  --frames-dir "$FRAMES" \
+  --sam3-json "$RUN/sam3/player.json" \
+  --mesh-root "$RUN/sam_body4d/mesh_4d_individual" \
+  --focal-root "$RUN/sam_body4d/focal_4d_individual" \
+  --floor-mask-dir "$RUN/sam3/green_field_instance_masks" \
+  --text-green-mask-dir "$RUN/sam3/green_field_instance_masks" \
+  --text-yellow-mask-dir "$RUN/sam3/yellow_outline_instance_masks" \
+  --text-white-mask-dir "$RUN/sam3/white_lines_instance_masks" \
+  --output-dir "$RUN/fused_birds_eye" \
   --min-depth-conf 1.0 \
-  --max-floor-points-per-feature 180 \
-  --max-player-points 80 \
-  --fps 10
+  --fixed-field-player-size \
+  --fps 1
 ```
 
-Current VGGT outputs:
+Open the interactive `viser` viewer:
 
 ```bash
-outputs/vggt/birds_eye_full/birds_eye_player_locations_vggt_h264.mp4
-outputs/vggt/birds_eye_full/birds_eye_player_locations_vggt.json
-outputs/vggt/birds_eye_full/vggt_predictions_compact.npz
+python scripts/view_vggt_reconstruction.py \
+  --frames-dir "$FRAMES" \
+  --predictions "$RUN/vggt/vggt_predictions_compact.npz" \
+  --floor-fit-json "$RUN/field_fit/field_fit_vggt_sam3_text_masks.json" \
+  --mesh-root "$RUN/sam_body4d/mesh_4d_individual" \
+  --focal-root "$RUN/sam_body4d/focal_4d_individual" \
+  --conf-threshold 20 \
+  --fixed-field-player-size \
+  --no-ground-meshes-to-field \
+  --port 8097
 ```
 
-The latest Week 1 VGGT/SAM-Body4D stack is indexed in:
-
-```bash
-outputs/CURRENT_ARTIFACTS.json
-```
+Open `http://127.0.0.1:8097`. Use `--hide-vggt-points` if you want the viewer to start with only the field and SAM-Body4D meshes visible.
 
 ## Output Video Format
 
