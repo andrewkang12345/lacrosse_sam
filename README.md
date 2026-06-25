@@ -679,6 +679,32 @@ python scripts/run_cotracker_vggt_player_trajectories.py \
 
 `--require-sam3-presence` keeps trajectories tied to frames where SAM3 still detects that object ID. `--ignore-cotracker-visibility` is useful on broadcast footage because CoTracker's boolean visibility can be very conservative even when the point path remains visually usable.
 
+For a true source-fps run, first extract a short clip at the broadcast frame rate and run SAM3 on those exact frames. Then run CoTracker on the source-fps SAM3 masks:
+
+```bash
+python scripts/run_cotracker_sourcefps_player_masks.py \
+  --frames-dir data/week1_112825_osh_tor_0820_0825_frames_source_fps \
+  --sam3-json "$RUN/sam3/player.json" \
+  --player-mask-dir "$RUN/sam3/player_instance_masks" \
+  --output-dir "$RUN/cotracker_sourcefps" \
+  --fps 59.94005994 \
+  --max-frames 120 \
+  --points-per-object 1 \
+  --min-object-frames 5 \
+  --require-sam3-presence \
+  --ignore-cotracker-visibility
+```
+
+Open the source-fps tracks interactively in Viser:
+
+```bash
+python scripts/view_cotracker_sourcefps_tracks.py \
+  --frames-dir data/week1_112825_osh_tor_0820_0825_frames_source_fps \
+  --tracks-json "$RUN/cotracker_sourcefps/cotracker_sourcefps_player_tracks.json" \
+  --port 8111 \
+  --fps 59.94005994
+```
+
 To render the trajectory JSON at the original video frame rate, interpolate the CoTracker/VGGT positions onto the source-video timeline:
 
 ```bash
@@ -725,6 +751,8 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/render_birds_eye_locations.py`: projects SAM3 player floor points through homography and writes a top-down player-location MP4.
 - `scripts/run_vggt_birds_eye.py`: uses VGGT camera/depth predictions plus SAM2 floor masks and SAM3 player masks to create a top-down player-location MP4 without relying on the earlier image homography.
 - `scripts/run_cotracker_vggt_player_trajectories.py`: seeds CoTracker point tracks from SAM3 player masks and projects the resulting tracks through VGGT into bird's-eye floor coordinates.
+- `scripts/run_cotracker_sourcefps_player_masks.py`: runs CoTracker directly on source-fps SAM3 player masks and writes source-fps camera trajectories.
+- `scripts/view_cotracker_sourcefps_tracks.py`: opens a Viser timeline for source-fps CoTracker player tracks.
 - `scripts/render_cotracker_trajectories_source_fps.py`: interpolates CoTracker/VGGT trajectory JSON onto the source-video timeline and writes source-fps H.264 review videos.
 - `scripts/merge_sam3_team_detections.py`: optional older path that merges black/white SAM3 prompt detections and assigns team colors using mask-average color for ties.
 - `scripts/run_sam_body4d_from_masks.py`: runs SAM-Body4D from exported label masks.
