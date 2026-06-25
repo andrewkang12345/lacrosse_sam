@@ -679,6 +679,21 @@ python scripts/run_cotracker_vggt_player_trajectories.py \
 
 `--require-sam3-presence` keeps trajectories tied to frames where SAM3 still detects that object ID. `--ignore-cotracker-visibility` is useful on broadcast footage because CoTracker's boolean visibility can be very conservative even when the point path remains visually usable.
 
+To render the trajectory JSON at the original video frame rate, interpolate the CoTracker/VGGT positions onto the source-video timeline:
+
+```bash
+python scripts/render_cotracker_trajectories_source_fps.py \
+  --trajectory-json "$RUN/cotracker_trajectories/cotracker_vggt_player_trajectories.json" \
+  --output-dir "$RUN/cotracker_trajectories_source_fps" \
+  --input-fps 1 \
+  --source-video "data/Week 1/112825_osh_tor.mp4" \
+  --source-start-sec 500 \
+  --duration-sec 153 \
+  --output-fps 60000/1001
+```
+
+This keeps the VGGT reconstruction and SAM3 masks at their analysis cadence, but writes smooth H.264 camera and bird's-eye review videos at the broadcast frame rate.
+
 ## Output Video Format
 
 All rendered tracking videos are written with `libx264` via `imageio-ffmpeg`:
@@ -710,6 +725,7 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/render_birds_eye_locations.py`: projects SAM3 player floor points through homography and writes a top-down player-location MP4.
 - `scripts/run_vggt_birds_eye.py`: uses VGGT camera/depth predictions plus SAM2 floor masks and SAM3 player masks to create a top-down player-location MP4 without relying on the earlier image homography.
 - `scripts/run_cotracker_vggt_player_trajectories.py`: seeds CoTracker point tracks from SAM3 player masks and projects the resulting tracks through VGGT into bird's-eye floor coordinates.
+- `scripts/render_cotracker_trajectories_source_fps.py`: interpolates CoTracker/VGGT trajectory JSON onto the source-video timeline and writes source-fps H.264 review videos.
 - `scripts/merge_sam3_team_detections.py`: optional older path that merges black/white SAM3 prompt detections and assigns team colors using mask-average color for ties.
 - `scripts/run_sam_body4d_from_masks.py`: runs SAM-Body4D from exported label masks.
 - `scripts/run_sam_body4d_from_sam3_boxes.py`: runs SAM-Body4D from SAM3 text detections, preserving multiple players.
