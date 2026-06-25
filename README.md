@@ -648,6 +648,37 @@ python scripts/view_vggt_reconstruction.py \
 
 Open `http://127.0.0.1:8097`. Use `--hide-vggt-points` if you want the viewer to start with only the field and SAM-Body4D meshes visible.
 
+## 11. VGGT + CoTracker Player Trajectories
+
+This path uses SAM3 player masks to seed CoTracker point tracks, then projects those tracked player points through VGGT depth and the fitted synthetic field. It writes a camera-view track overlay and a bird's-eye trajectory video.
+
+Install CoTracker locally:
+
+```bash
+git clone https://github.com/facebookresearch/co-tracker third_party/co-tracker
+```
+
+Run trajectory projection from an existing VGGT/SAM3 field-fit stack:
+
+```bash
+python scripts/run_cotracker_vggt_player_trajectories.py \
+  --frames-dir "$FRAMES" \
+  --sam3-json "$RUN/sam3/player.json" \
+  --player-mask-dir "$RUN/sam3/player_instance_masks" \
+  --vggt-npz "$RUN/vggt/vggt_predictions_compact.npz" \
+  --field-fit-json "$RUN/field_fit/field_fit_vggt_sam3_text_masks.json" \
+  --output-dir "$RUN/cotracker_trajectories" \
+  --fps 1 \
+  --points-per-object 3 \
+  --min-object-frames 10 \
+  --min-depth-conf-percentile 20 \
+  --require-sam3-presence \
+  --ignore-cotracker-visibility \
+  --disable-mask-gate
+```
+
+`--require-sam3-presence` keeps trajectories tied to frames where SAM3 still detects that object ID. `--ignore-cotracker-visibility` is useful on broadcast footage because CoTracker's boolean visibility can be very conservative even when the point path remains visually usable.
+
 ## Output Video Format
 
 All rendered tracking videos are written with `libx264` via `imageio-ffmpeg`:
@@ -678,6 +709,7 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/render_camera_homography_overlay.py`: projects the fitted floor model and player floor-contact points back onto the camera video for calibration debugging.
 - `scripts/render_birds_eye_locations.py`: projects SAM3 player floor points through homography and writes a top-down player-location MP4.
 - `scripts/run_vggt_birds_eye.py`: uses VGGT camera/depth predictions plus SAM2 floor masks and SAM3 player masks to create a top-down player-location MP4 without relying on the earlier image homography.
+- `scripts/run_cotracker_vggt_player_trajectories.py`: seeds CoTracker point tracks from SAM3 player masks and projects the resulting tracks through VGGT into bird's-eye floor coordinates.
 - `scripts/merge_sam3_team_detections.py`: optional older path that merges black/white SAM3 prompt detections and assigns team colors using mask-average color for ties.
 - `scripts/run_sam_body4d_from_masks.py`: runs SAM-Body4D from exported label masks.
 - `scripts/run_sam_body4d_from_sam3_boxes.py`: runs SAM-Body4D from SAM3 text detections, preserving multiple players.
