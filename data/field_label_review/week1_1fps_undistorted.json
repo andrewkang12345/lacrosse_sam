@@ -1,0 +1,74 @@
+{
+ "_note": "Visual review of build_field_paint_masks.py candidates (ids from outputs/vggt_omega/week1_1fps_undistorted/paint_masks/review). Every frame was checked; only corrections are listed. Pieces set to 'unlabeled' are ones a fit proposed but that could not be confirmed by eye (close-ups behind the crease, stick shafts, logo artwork).",
+ "frame_00065.jpg": {
+  "5": "right_restraining_line",
+  "6": "right_restraining_line"
+ },
+ "frame_00075.jpg": {
+  "16": "unlabeled"
+ },
+ "frame_00077.jpg": {
+  "1": "right_restraining_line",
+  "4": "right_restraining_line",
+  "8": "right_restraining_line",
+  "10": "right_restraining_line"
+ },
+ "frame_00079.jpg": {
+  "8": "unlabeled",
+  "9": "unlabeled",
+  "11": "unlabeled",
+  "12": "unlabeled"
+ },
+ "frame_00080.jpg": {
+  "5": "reject",
+  "2": "unlabeled"
+ },
+ "frame_00081.jpg": {
+  "1": "right_restraining_line",
+  "8": "right_restraining_line",
+  "10": "right_restraining_line"
+ },
+ "frame_00082.jpg": {
+  "2": "right_restraining_line",
+  "6": "right_restraining_line",
+  "8": "right_restraining_line",
+  "10": "right_restraining_line"
+ },
+ "frame_00096.jpg": {
+  "4": "midfield_line"
+ },
+ "frame_00127.jpg": {
+  "9": "unlabeled"
+ },
+ "frame_00129.jpg": {
+  "10": "right_restraining_line"
+ },
+ "frame_00130.jpg": {
+  "9": "right_restraining_line"
+ },
+ "frame_00131.jpg": {
+  "2": "reject",
+  "4": "reject",
+  "3": "unlabeled"
+ },
+ "frame_00132.jpg": {
+  "4": "unlabeled",
+  "11": "unlabeled",
+  "12": "unlabeled",
+  "19": "unlabeled",
+  "5": "unlabeled"
+ },
+ "frame_00134.jpg": {
+  "8": "right_restraining_line",
+  "10": "right_restraining_line"
+ },
+ "frame_00135.jpg": {
+  "9": "right_restraining_line"
+ },
+ "frame_00136.jpg": {
+  "11": "right_restraining_line"
+ },
+ "frame_00153.jpg": {
+  "2": "unlabeled"
+ }
+}

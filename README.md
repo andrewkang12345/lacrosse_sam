@@ -34,21 +34,23 @@ Generated artifacts under `outputs/` are now grouped by workflow stage:
 - `outputs/sam3/text/`, `outputs/sam3/team_classification/`
 - `outputs/meshes/sam_body4d/`, `outputs/meshes/4d_humans/`
 - `outputs/floor/clicks/`, `outputs/floor/sam2_prompts/`, `outputs/floor/calibrations/`
-- `outputs/birds_eye/`, `outputs/overlays/camera/`, `outputs/debug/`, `outputs/vggt/`
+- `outputs/birds_eye/`, `outputs/overlays/camera/`
+- `outputs/vggt_omega/<clip>/`: VGGT-Omega predictions, `field_fit/`, `scene_3d/` 3D videos, `vggt_layout/`
+- `outputs/vggt/`: VGGT (non-Omega) runs and fits referenced by the CoTracker and SAM-Body4D outputs
 
 The older flat paths shown in historical command examples may need to be replaced with the corresponding grouped path. Large files under `outputs/` are intentionally not tracked.
 
-## How The VGGT + SAM3 + SAM-Body4D Stack Works
+## How The VGGT-Omega + SAM3 + SAM-Body4D Stack Works
 
 This stack combines three separate estimates into one 3D view of the play:
 
-- `SAM3` finds semantic regions in the broadcast frames from text prompts. In the current Week 1 workflow, it is used for `player`, `green field`, `white lines on green field`, and `yellow outline around field border`. The player masks define which image pixels belong to each detected person; the field masks define which VGGT points should be treated as floor or field-landmark evidence.
-- `VGGT` predicts camera intrinsics, camera poses, depth, and a 3D point cloud from the video frames. Those predictions let the scripts lift SAM3 mask pixels out of 2D image space into VGGT's 3D reconstruction space.
+- `SAM3` finds semantic regions in the broadcast frames from text prompts. In the current Week 1 workflow, it is used for `player`, `green field`, `white lines on green field`, and `yellow outline around field border`. The player masks define which image pixels belong to each detected person; the field masks seed a bootstrap field fit, and the fit itself uses the colour-detected, labeled paint masks from `build_field_paint_masks.py`.
+- `VGGT-Omega` predicts camera intrinsics, camera poses and depth from the video frames, which give a 3D point cloud of the arena and a floor plane.
 - `SAM-Body4D` reconstructs one animated human mesh per SAM3 player detection track. The mesh outputs are kept in their own local coordinate systems first, then transformed into the VGGT scene for visualization.
 
-The field fitting step uses SAM3 field masks projected into the VGGT point cloud to estimate the floor plane and align a rigid 200 ft x 85 ft NLL synthetic field to that plane. The fit is constrained to preserve the field shape; it should translate, rotate, and uniformly scale the synthetic layout, not stretch it into a new geometry. Extra anchors, such as goalie locations near the goal and huddled players near center, can help stabilize the alignment when the broadcast reconstruction is incomplete.
+The field fitting step (`fit_field_plane_landmarks.py`) fits a plane to VGGT-Omega's floor points, lifts landmark pixels onto that plane by intersecting camera rays with it, and fits the NLL field there with a rigid similarity (no mirroring, no shape change). It then refines the broadcast camera against the known field: one shared camera position, plus per-frame pan, tilt, roll and zoom, and the arena's board corner radius. That removes VGGT's telephoto zoom/distance distortion. The landmarks are painted lines and the far board base, detected by colour and labeled per side (`build_field_paint_masks.py`), with the labels checked by eye; the field model follows the NLL rulebook (`field_model.py`). [docs/field_plane_fit.md](docs/field_plane_fit.md) explains why depth-based fitting fails on broadcast footage and reports the plane fit's accuracy.
 
-The mesh fusion step places each SAM-Body4D human on the corresponding VGGT player blob by matching the SAM3 player mask to nearby VGGT 3D points. The all-player path keeps every SAM3 `player` detection, including substitutes visible near the boards. If field grounding introduces offsets, use `--no-ground-meshes-to-field` so placement follows the player blob in VGGT space instead.
+The mesh fusion step places each SAM-Body4D human on the corresponding VGGT-Omega player blob by matching the SAM3 player mask to nearby VGGT 3D points. The all-player path keeps every SAM3 `player` detection, including substitutes visible near the boards. If field grounding introduces offsets, use `--no-ground-meshes-to-field` so placement follows the player blob in VGGT space instead.
 
 The commands in the VGGT section below produce both an interactive `viser` scene and H.264 review videos from local input assets.
 
@@ -509,91 +511,108 @@ python scripts/render_birds_eye_locations.py \
 
 The primitive SAM2 landmark pass fits image-space line primitives and visible line segments directly from SAM2 masks, filters the outline mask to the yellow lower rink envelope, and fits the visible crease as an arc segment. `primitive_full_homography` refines the full projective transform when multiple primitives are visible; frames with only one line use a bounded line-specific correction. `--draw-landmark-masks` overlays the SAM2 camera-space floor landmark segmentations on the camera video; `--draw-landmark-mask-points` projects sampled SAM2 landmark-mask pixels onto the top-down floor view.
 
-## 10. VGGT + SAM3 + SAM-Body4D Visualization
+## 10. VGGT-Omega + SAM3 + SAM-Body4D Visualization
 
-This is the reproducible path for the 3D visualization. It uses SAM3 text masks for players and field evidence, VGGT for camera/depth reconstruction, SAM-Body4D for human meshes, then opens a `viser` scene with the VGGT point cloud, fitted synthetic field, and fitted human meshes.
+This is the reproducible path for the 3D visualization. SAM3 text masks give players and field evidence, VGGT-Omega gives cameras and depth, the field is fitted to VGGT-Omega's floor plane (see [docs/field_plane_fit.md](docs/field_plane_fit.md)), and SAM-Body4D gives human meshes.
 
-Install the external repos locally:
+Install the external repos locally. The VGGT-Omega checkpoint is gated on Hugging Face (`facebook/VGGT-Omega`); put `vggt_omega_1b_512.pt` under `checkpoints/vggt_omega/`:
 
 ```bash
-git clone https://github.com/facebookresearch/vggt third_party/VGGT
+git clone https://github.com/facebookresearch/vggt-omega third_party/vggt_omega
+git clone https://github.com/facebookresearch/vggt third_party/VGGT          # geometry helpers used by the VGGT-layout consumers
 git clone https://github.com/gaomingqi/sam-body4d third_party/sam-body4d
-python -m pip install -r third_party/VGGT/requirements.txt
+python -m pip install -r third_party/vggt_omega/requirements.txt
 ```
 
-Prepare a short frame directory from a local source video. One frame per second is a good first pass because VGGT and SAM-Body4D are expensive:
+Prepare a frame directory from a local source video. One frame per second is a good first pass for Week 1. Run SAM3 text tracking on the original frames: the `player` masks drive SAM-Body4D and CoTracker; the field masks drive the field fit.
 
 ```bash
-mkdir -p data/vggt_sam_demo_frames_1fps
-ffmpeg -ss 00:08:20 -to 00:10:53 \
-  -i "data/Week 1/112825_osh_tor.mp4" \
-  -vf fps=1 \
-  data/vggt_sam_demo_frames_1fps/frame_%05d.jpg
+export RAW=data/week1_112825_osh_tor_0820_1053_frames_1fps
+export RAW_SAM3=outputs/sam3/week1_112825_osh_tor_0820_1053_1fps
+ffmpeg -ss 00:08:20 -to 00:10:53 -i "data/Week 1/112825_osh_tor.mp4" -vf fps=1 "$RAW/frame_%05d.jpg"
 
-export FRAMES=data/vggt_sam_demo_frames_1fps
-export RUN=outputs/vggt_sam_demo
-export HF_TOKEN='your_huggingface_token'
+for prompt in player 'green field' 'white lines on green field' 'yellow outline around field border'; do
+  name=$(echo "$prompt" | cut -d' ' -f1-2 | tr ' ' '_')
+  HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py --frames-dir "$RAW" --text "$prompt" \
+    --output "$RAW_SAM3/${name}_tracks_chunked.mp4" --mask-dir "$RAW_SAM3/${name}_label_masks_chunked" \
+    --instance-mask-dir "$RAW_SAM3/${name}_instance_masks_chunked" --fps 1
+done
 ```
 
-Run SAM3 text tracking. The `player` masks drive SAM-Body4D; the field masks drive field-plane fitting:
+Remove broadcast lens distortion (radial k1 estimated from the straightness of the SAM3 white lines), remap the masks, and re-box the player detections:
 
 ```bash
-HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
-  --frames-dir "$FRAMES" \
-  --text 'player' \
-  --output "$RUN/sam3/player.mp4" \
-  --mask-dir "$RUN/sam3/player_label_masks" \
-  --instance-mask-dir "$RUN/sam3/player_instance_masks" \
-  --fps 1
+export FRAMES=data/week1_112825_osh_tor_0820_1053_frames_1fps_undistorted
+export SAM3=outputs/sam3/week1_112825_osh_tor_0820_1053_1fps_undistorted
+export RUN=outputs/vggt_omega/week1_1fps_undistorted
 
-HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
-  --frames-dir "$FRAMES" \
-  --text 'green field' \
-  --output "$RUN/sam3/green_field.mp4" \
-  --mask-dir "$RUN/sam3/green_field_label_masks" \
-  --instance-mask-dir "$RUN/sam3/green_field_instance_masks" \
-  --fps 1
+python scripts/undistort_clip_from_text_line_masks.py \
+  --frames-dir "$RAW" --white-mask-dir "$RAW_SAM3/white_lines_instance_masks_chunked" \
+  --output-frames-dir "$FRAMES" \
+  --calibration-json outputs/vggt/week1_112825_osh_tor_0820_1053_undistorted/lens_undistortion_text_masks.json \
+  $(for n in player green_field white_lines yellow_outline; do echo --npz-mask-map "$RAW_SAM3/${n}_instance_masks_chunked:$SAM3/${n}_instance_masks_chunked"; done)
 
-HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
-  --frames-dir "$FRAMES" \
-  --text 'white lines on green field' \
-  --output "$RUN/sam3/white_lines.mp4" \
-  --mask-dir "$RUN/sam3/white_lines_label_masks" \
-  --instance-mask-dir "$RUN/sam3/white_lines_instance_masks" \
-  --fps 1
-
-HF_TOKEN="$HF_TOKEN" python scripts/run_sam3_text_chunked.py \
-  --frames-dir "$FRAMES" \
-  --text 'yellow outline around field border' \
-  --output "$RUN/sam3/yellow_outline.mp4" \
-  --mask-dir "$RUN/sam3/yellow_outline_label_masks" \
-  --instance-mask-dir "$RUN/sam3/yellow_outline_instance_masks" \
-  --fps 1
+python scripts/rebox_sam3_json_from_instance_masks.py \
+  --source-json "$RAW_SAM3/player_tracks_chunked.json" --instance-mask-dir "$SAM3/player_instance_masks_chunked" \
+  --frames-dir "$FRAMES" --output-json "$SAM3/player_tracks_chunked_reboxed.json"
 ```
 
-Run VGGT on the same frames:
+Run VGGT-Omega (about 45 s and 19 GB of GPU memory for 153 frames at 1280x720):
 
 ```bash
-python scripts/run_vggt_reconstruction_clip.py \
-  --vggt-repo third_party/VGGT \
-  --frames-dir "$FRAMES" \
-  --output-dir "$RUN/vggt" \
-  --max-frames 180
+python scripts/run_vggt_omega_clip.py --frames-dir "$FRAMES" --output "$RUN/vggt_omega_predictions.npz"
 ```
 
-Fit the rigid synthetic NLL field to the SAM3 field masks lifted into VGGT 3D space:
+Fit the NLL field to the VGGT-Omega floor plane, then refine the broadcast camera against it. The landmark masks come from `build_field_paint_masks.py`: painted lines and board edges detected by colour, with labels proposed from a fit of the clip and checked by eye on the review sheets it writes (`$RUN/paint_masks/review/sheet_*.jpg`). Corrections go in a review JSON keyed by frame and candidate id; the checked ones for both clips are in `data/field_label_review/`. A bootstrap fit from the SAM3 masks (`--landmark white_lines=... --landmark field_outline=... --detect-white-paint`) is enough to propose labels; without `--fit` every candidate starts unlabeled.
 
 ```bash
-python scripts/fit_vggt_field_from_sam3_text_masks.py \
-  --vggt-repo third_party/VGGT \
-  --vggt-npz "$RUN/vggt/vggt_predictions_compact.npz" \
-  --frames-dir "$FRAMES" \
-  --white-mask-dir "$RUN/sam3/white_lines_instance_masks" \
-  --yellow-mask-dir "$RUN/sam3/yellow_outline_instance_masks" \
-  --green-mask-dir "$RUN/sam3/green_field_instance_masks" \
-  --output-dir "$RUN/field_fit" \
-  --min-depth-conf-percentile 20 \
-  --fps 1
+python scripts/build_field_paint_masks.py \
+  --frames-dir "$FRAMES" --predictions "$RUN/vggt_omega_predictions.npz" \
+  --player-mask-dir $SAM3/player_instance_masks_chunked \
+  --fit "$RUN/field_fit/field_plane_fit.json" --review data/field_label_review/week1_1fps_undistorted.json \
+  --output-dir "$RUN/paint_masks"
+
+python scripts/fit_field_plane_landmarks.py \
+  --predictions "$RUN/vggt_omega_predictions.npz" --frames-dir "$FRAMES" \
+  --paint-masks "$RUN/paint_masks" --fps 1 --output-dir "$RUN/field_fit"
+```
+
+For the 10 s clip (purple end zones, SAM2 faceoff-dot masks added as extra landmarks):
+
+```bash
+RUN10=outputs/vggt_omega/clip10s_10fps_undistorted
+DM=outputs/sam2/floor_features/sam2_faceoff_corner_instance_masks_undistorted
+python scripts/build_field_paint_masks.py \
+  --frames-dir data/frames_10fps_undistorted --predictions $RUN10/vggt_omega_predictions.npz \
+  --player-mask-dir outputs/sam3/text/sam3_text_player_instance_masks_undistorted --floor-colours green,purple \
+  --fit $RUN10/field_fit/field_plane_fit.json --review data/field_label_review/clip10s_10fps_undistorted.json \
+  --output-dir $RUN10/paint_masks
+python scripts/fit_field_plane_landmarks.py \
+  --predictions $RUN10/vggt_omega_predictions.npz --frames-dir data/frames_10fps_undistorted \
+  --paint-masks $RUN10/paint_masks --landmark faceoff_right_upper=$DM#6 --landmark faceoff_right_lower=$DM#7 \
+  --output-dir $RUN10/field_fit
+```
+
+The field model (`field_model.py`) follows the NLL rulebook; the corner radius of the boards is estimated per arena (`field_dims` in the output).
+
+Outputs: `field_plane_fit.json`, `field_homographies.json` (per-frame image->field homographies, readable by `render_birds_eye_locations.py --calibration` and `render_camera_homography_overlay.py --calibration`), `field_reprojection_h264.mp4` and `landmarks_on_field.jpg`.
+
+Render the VGGT-Omega reconstruction in 3D on the fitted field: an orbit that ends top-down, and a per-frame timeline with the input frame, an oblique 3D view and a top-down view. Points are placed along the refined cameras' rays at VGGT-Omega's heights above the floor, so the floor paint lands on the fitted lines; `--geometry raw` shows VGGT-Omega's own geometry instead:
+
+```bash
+python scripts/render_vggt_scene_3d.py \
+  --predictions "$RUN/vggt_omega_predictions.npz" --field-fit "$RUN/field_fit/field_plane_fit.json" \
+  --frames-dir "$FRAMES" --output-dir "$RUN/scene_3d" --timeline-fps 3
+```
+
+The SAM-Body4D fusion, the `viser` viewer and the CoTracker scripts read the 518x518 VGGT layout. Export VGGT-Omega and the rigid planar fit into that layout:
+
+```bash
+python scripts/export_vggt_omega_vggt_layout.py \
+  --predictions "$RUN/vggt_omega_predictions.npz" --field-fit "$RUN/field_fit/field_plane_fit.json" \
+  --frames-dir "$FRAMES" --output-dir "$RUN/vggt_layout"
+export VGGT_NPZ="$RUN/vggt_layout/vggt_predictions_compact.npz"
+export FIELD_FIT="$RUN/vggt_layout/field_fit_vggt_layout.json"
 ```
 
 Run SAM-Body4D from the SAM3 `player` boxes:
@@ -603,7 +622,7 @@ PYOPENGL_PLATFORM=egl python scripts/run_sam_body4d_from_sam3_boxes.py \
   --repo-root third_party/sam-body4d \
   --config third_party/sam-body4d/configs/body4d.yaml \
   --frames-dir "$FRAMES" \
-  --sam3-json "$RUN/sam3/player.json" \
+  --sam3-json "$SAM3/player_tracks_chunked_reboxed.json" \
   --output-dir "$RUN/sam_body4d" \
   --output-video "$RUN/sam_body4d_overlay_h264.mp4" \
   --render-mode overlay \
@@ -615,16 +634,16 @@ Render top-down H.264 review videos with SAM-Body4D mesh points and SAM3 field-m
 ```bash
 python scripts/render_sam_body4d_vggt_birds_eye.py \
   --vggt-repo third_party/VGGT \
-  --vggt-json "$RUN/field_fit/field_fit_vggt_sam3_text_masks.json" \
-  --vggt-npz "$RUN/vggt/vggt_predictions_compact.npz" \
+  --vggt-json "$FIELD_FIT" \
+  --vggt-npz "$VGGT_NPZ" \
   --frames-dir "$FRAMES" \
-  --sam3-json "$RUN/sam3/player.json" \
+  --sam3-json "$SAM3/player_tracks_chunked_reboxed.json" \
   --mesh-root "$RUN/sam_body4d/mesh_4d_individual" \
   --focal-root "$RUN/sam_body4d/focal_4d_individual" \
-  --floor-mask-dir "$RUN/sam3/green_field_instance_masks" \
-  --text-green-mask-dir "$RUN/sam3/green_field_instance_masks" \
-  --text-yellow-mask-dir "$RUN/sam3/yellow_outline_instance_masks" \
-  --text-white-mask-dir "$RUN/sam3/white_lines_instance_masks" \
+  --floor-mask-dir "$SAM3/green_field_instance_masks_chunked" \
+  --text-green-mask-dir "$SAM3/green_field_instance_masks_chunked" \
+  --text-yellow-mask-dir "$SAM3/yellow_outline_instance_masks_chunked" \
+  --text-white-mask-dir "$SAM3/white_lines_instance_masks_chunked" \
   --output-dir "$RUN/fused_birds_eye" \
   --min-depth-conf 1.0 \
   --fixed-field-player-size \
@@ -636,8 +655,8 @@ Open the interactive `viser` viewer:
 ```bash
 python scripts/view_vggt_reconstruction.py \
   --frames-dir "$FRAMES" \
-  --predictions "$RUN/vggt/vggt_predictions_compact.npz" \
-  --floor-fit-json "$RUN/field_fit/field_fit_vggt_sam3_text_masks.json" \
+  --predictions "$VGGT_NPZ" \
+  --floor-fit-json "$FIELD_FIT" \
   --mesh-root "$RUN/sam_body4d/mesh_4d_individual" \
   --focal-root "$RUN/sam_body4d/focal_4d_individual" \
   --conf-threshold 20 \
@@ -658,15 +677,15 @@ Install CoTracker locally:
 git clone https://github.com/facebookresearch/co-tracker third_party/co-tracker
 ```
 
-Run trajectory projection from an existing VGGT/SAM3 field-fit stack:
+Run trajectory projection from the VGGT-Omega stack of section 10 (`$VGGT_NPZ` and `$FIELD_FIT` from `export_vggt_omega_vggt_layout.py`):
 
 ```bash
 python scripts/run_cotracker_vggt_player_trajectories.py \
   --frames-dir "$FRAMES" \
-  --sam3-json "$RUN/sam3/player.json" \
-  --player-mask-dir "$RUN/sam3/player_instance_masks" \
-  --vggt-npz "$RUN/vggt/vggt_predictions_compact.npz" \
-  --field-fit-json "$RUN/field_fit/field_fit_vggt_sam3_text_masks.json" \
+  --sam3-json "$SAM3/player_tracks_chunked_reboxed.json" \
+  --player-mask-dir "$SAM3/player_instance_masks_chunked" \
+  --vggt-npz "$VGGT_NPZ" \
+  --field-fit-json "$FIELD_FIT" \
   --output-dir "$RUN/cotracker_trajectories" \
   --fps 1 \
   --points-per-object 3 \
@@ -679,14 +698,15 @@ python scripts/run_cotracker_vggt_player_trajectories.py \
 
 `--require-sam3-presence` keeps trajectories tied to frames where SAM3 still detects that object ID. `--ignore-cotracker-visibility` is useful on broadcast footage because CoTracker's boolean visibility can be very conservative even when the point path remains visually usable.
 
-For a true source-fps run, first extract a short clip at the broadcast frame rate and run SAM3 on those exact frames. Then run CoTracker on the source-fps SAM3 masks:
+For a true source-fps run, first extract a short clip at the broadcast frame rate and run SAM3 on those exact frames (`run_sam3_text_chunked.py --text player`, outputs under `$SRC/sam3/`). Then run CoTracker on the source-fps SAM3 masks:
 
 ```bash
+export SRC=outputs/vggt/cotracker/week1_0820_0825_sourcefps
 python scripts/run_cotracker_sourcefps_player_masks.py \
   --frames-dir data/week1_112825_osh_tor_0820_0825_frames_source_fps \
-  --sam3-json "$RUN/sam3/player.json" \
-  --player-mask-dir "$RUN/sam3/player_instance_masks" \
-  --output-dir "$RUN/cotracker_sourcefps" \
+  --sam3-json "$SRC/sam3/player.json" \
+  --player-mask-dir "$SRC/sam3/player_instance_masks" \
+  --output-dir "$SRC/cotracker_120f" \
   --fps 59.94005994 \
   --max-frames 120 \
   --points-per-object 1 \
@@ -700,7 +720,7 @@ Open the source-fps tracks interactively in Viser:
 ```bash
 python scripts/view_cotracker_sourcefps_tracks.py \
   --frames-dir data/week1_112825_osh_tor_0820_0825_frames_source_fps \
-  --tracks-json "$RUN/cotracker_sourcefps/cotracker_sourcefps_player_tracks.json" \
+  --tracks-json "$SRC/cotracker_120f/cotracker_sourcefps_player_tracks.json" \
   --port 8111 \
   --fps 59.94005994
 ```
@@ -749,7 +769,19 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/refine_floor_homography_from_unlabeled_clicks.py`: refines a homography by treating free clicks as points on modeled floor features.
 - `scripts/render_camera_homography_overlay.py`: projects the fitted floor model and player floor-contact points back onto the camera video for calibration debugging.
 - `scripts/render_birds_eye_locations.py`: projects SAM3 player floor points through homography and writes a top-down player-location MP4.
-- `scripts/run_vggt_birds_eye.py`: uses VGGT camera/depth predictions plus SAM2 floor masks and SAM3 player masks to create a top-down player-location MP4 without relying on the earlier image homography.
+- `scripts/run_vggt_omega_clip.py`: runs VGGT-Omega on a frame directory and saves cameras, depth, confidence and colours.
+- `scripts/fit_field_plane_landmarks.py`: fits the NLL field to the VGGT-Omega floor plane from landmark masks, refines the broadcast camera, and writes per-frame image->field homographies (see `docs/field_plane_fit.md`).
+- `scripts/build_field_paint_masks.py`: detects painted lines and board edges by colour, proposes labels from a field fit, applies a checked review JSON, and writes landmark masks and review sheets for the field fit.
+- `scripts/field_model.py`: parametric NLL floor (rulebook markings, per-arena corner radius): landmark distances, curves and drawing.
+- `scripts/render_vggt_scene_3d.py`: renders the VGGT-Omega point cloud on the fitted field as H.264 videos (orbit to top-down, and a per-frame timeline).
+- `scripts/export_vggt_omega_vggt_layout.py`: writes VGGT-Omega predictions and the rigid field fit in the 518x518 VGGT layout used by the SAM-Body4D fusion, the viewer and the CoTracker scripts.
+- `scripts/nll_field_geometry.py`: NLL floor dimensions and line, crease and outline samplers.
+- `scripts/run_sam3_text_chunked.py`: runs SAM3 text tracking in chunks for long clips.
+- `scripts/undistort_clip_from_text_line_masks.py`, `scripts/undistort_clip_from_field_lines.py`: estimate radial lens distortion from straight field lines, write undistorted frames and remap masks.
+- `scripts/rebox_sam3_json_from_instance_masks.py`: recomputes SAM3 detection boxes from (remapped) instance masks.
+- `scripts/render_sam_body4d_vggt_birds_eye.py`: places SAM-Body4D meshes on VGGT player points and writes top-down review videos.
+- `scripts/view_vggt_reconstruction.py`: `viser` viewer for the VGGT point cloud, fitted field and SAM-Body4D meshes.
+- `scripts/run_vggt_reconstruction_clip.py`, `scripts/run_vggt_birds_eye.py`: VGGT (non-Omega) reconstruction and plane-homography bird's-eye path. `run_vggt_birds_eye.py` also provides shared helpers to the depth-based scripts above.
 - `scripts/run_cotracker_vggt_player_trajectories.py`: seeds CoTracker point tracks from SAM3 player masks and projects the resulting tracks through VGGT into bird's-eye floor coordinates.
 - `scripts/run_cotracker_sourcefps_player_masks.py`: runs CoTracker directly on source-fps SAM3 player masks and writes source-fps camera trajectories.
 - `scripts/view_cotracker_sourcefps_tracks.py`: opens a Viser timeline for source-fps CoTracker player tracks.
@@ -759,6 +791,8 @@ This makes the MP4 files viewable in VS Code.
 - `scripts/run_sam_body4d_from_sam3_boxes.py`: runs SAM-Body4D from SAM3 text detections, preserving multiple players.
 - `scripts/run_4d_humans_from_sam3_boxes.py`: runs 4D-Humans/HMR2 from SAM3 text detections and overlays SMPL meshes on the camera video.
 - `scripts/video_utils.py`: shared frame loading, mask overlay, coordinate grid, and H.264 writing helpers.
+- `scripts/faceoff_clicks_to_sam2_prompts.py`: converts faceoff-dot clicks into SAM2 prompts.
+- `scripts/render_field_landmark_masks_debug.py`, `scripts/render_4dhumans_own_birds_eye.py`: debug renderers.
 
 ## Notes
 

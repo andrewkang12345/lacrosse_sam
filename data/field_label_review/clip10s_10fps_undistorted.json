@@ -1,0 +1,107 @@
+{
+ "_note": "Visual review of build_field_paint_masks.py candidates (ids from outputs/vggt_omega/clip10s_10fps_undistorted/paint_masks/review). Every frame was checked; only corrections are listed. The midfield line is the vertical stub between the far boards and the logo's crown; the logo's own white border is left unlabeled.",
+ "frame_00002.jpg": {
+  "2": "midfield_line",
+  "4": "left_restraining_line"
+ },
+ "frame_00003.jpg": {
+  "2": "midfield_line"
+ },
+ "frame_00004.jpg": {
+  "2": "midfield_line"
+ },
+ "frame_00005.jpg": {
+  "2": "midfield_line"
+ },
+ "frame_00006.jpg": {
+  "2": "midfield_line"
+ },
+ "frame_00007.jpg": {
+  "2": "midfield_line"
+ },
+ "frame_00008.jpg": {
+  "3": "midfield_line"
+ },
+ "frame_00009.jpg": {
+  "1": "midfield_line"
+ },
+ "frame_00010.jpg": {
+  "1": "midfield_line"
+ },
+ "frame_00011.jpg": {
+  "1": "midfield_line"
+ },
+ "frame_00012.jpg": {
+  "2": "midfield_line"
+ },
+ "frame_00013.jpg": {
+  "4": "midfield_line"
+ },
+ "frame_00014.jpg": {
+  "1": "midfield_line"
+ },
+ "frame_00015.jpg": {
+  "1": "midfield_line"
+ },
+ "frame_00016.jpg": {
+  "1": "midfield_line"
+ },
+ "frame_00017.jpg": {
+  "1": "midfield_line"
+ },
+ "frame_00020.jpg": {
+  "3": "midfield_line",
+  "2": "right_restraining_line"
+ },
+ "frame_00021.jpg": {
+  "3": "midfield_line"
+ },
+ "frame_00000.jpg": {
+  "3": "left_restraining_line"
+ },
+ "frame_00001.jpg": {
+  "2": "left_restraining_line"
+ },
+ "frame_00022.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00023.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00024.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00025.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00026.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00027.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00028.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00029.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00030.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00031.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00032.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00033.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00034.jpg": {
+  "1": "right_restraining_line"
+ },
+ "frame_00035.jpg": {
+  "1": "right_restraining_line"
+ }
+}
