@@ -14,6 +14,8 @@ import numpy as np
 DEFAULT_TEAM_COLORS = {
     "black": [255, 80, 40],
     "white": [70, 170, 255],
+    "referee": [150, 150, 150],
+    "ignore": [90, 90, 90],
     "unknown": [180, 180, 180],
 }
 
@@ -321,6 +323,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--white-fraction-threshold", type=float, default=0.25)
     parser.add_argument("--yellow-fraction-threshold", type=float, default=0.025)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument(
+        "--review",
+        default=None,
+        help="JSON of per-object corrections {object_id: team}, checked by eye; teams black, white, referee or ignore "
+        "(not on the floor: bench, stands). Keys starting with '_' are comments.",
+    )
     return parser.parse_args()
 
 
@@ -397,6 +405,13 @@ def main() -> None:
         else:
             team = "black" if luma < threshold else "white"
         object_teams[obj_id] = team
+    review = {}
+    if args.review:
+        raw = json.loads(Path(args.review).read_text())
+        review = {int(k): str(v) for k, v in raw.items() if not str(k).startswith("_")}
+        unknown = sorted(set(review.values()) - set(team_colors))
+        if unknown:
+            raise ValueError(f"Unknown team names in {args.review}: {unknown}")
 
     samples_by_frame: dict[int, list[TorsoSample]] = {}
     for sample in samples:
@@ -418,6 +433,8 @@ def main() -> None:
         "object_feature_medians": object_feature_medians,
         "object_teams": object_teams,
         "classification_mode": args.classification_mode,
+        "review": args.review,
+        "review_overrides": {str(k): v for k, v in sorted(review.items())},
         "white_fraction_threshold": args.white_fraction_threshold,
         "yellow_fraction_threshold": args.yellow_fraction_threshold,
         "frames": [],
@@ -442,7 +459,7 @@ def main() -> None:
             "gray_fraction": [],
         }
         for sample in samples_by_frame.get(frame_idx, []):
-            team = object_teams.get(sample.object_id) if smooth_by_object else None
+            team = review.get(sample.object_id) or (object_teams.get(sample.object_id) if smooth_by_object else None)
             if team is None:
                 if args.classification_mode == "composition":
                     team = (
@@ -476,7 +493,7 @@ def main() -> None:
     write_h264(rendered, Path(args.output_video), args.fps)
     counts = {
         team: sum(record["teams"].count(team) for record in metadata["frames"])
-        for team in ["black", "white"]
+        for team in team_colors
     }
     print(
         json.dumps(

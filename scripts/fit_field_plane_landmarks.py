@@ -18,9 +18,8 @@ Pipeline (see docs/field_plane_fit.md for the reasoning):
 Outputs (in --output-dir):
   field_plane_fit.json            plane, similarity, per-frame field cameras, metrics
   field_homographies.json         per-frame image->field homographies
-                                  (schema floor_homography_matrix_v1, usable by
-                                  render_birds_eye_locations.py and
-                                  render_camera_homography_overlay.py)
+                                  (schema floor_homography_matrix_v1, read by
+                                  render_field_birds_eye.py)
   field_reprojection_h264.mp4     camera frames with the fitted field drawn on top
   landmarks_on_field.jpg          lifted landmark pixels drawn on the field diagram
 """

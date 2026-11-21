@@ -14,6 +14,12 @@ There are two clips: 10 s of San Diego at 10 fps, and 153 s of Week 1 (Toronto a
 
 Click a preview to open the full H.264 video.
 
+**Players on the fitted field.** Each player is a circle in their team's colour, placed through that frame's refined camera. The shaded area is the floor the camera sees in that frame.
+
+| 10 s clip, San Diego | Week 1, Oshawa |
+|---|---|
+| [![10 s clip bird's-eye](docs/videos/previews/clip10s_birds_eye.webp)](docs/videos/clip10s_birds_eye.mp4) | [![Week 1 bird's-eye](docs/videos/previews/week1_birds_eye.webp)](docs/videos/week1_birds_eye.mp4) |
+
 **VGGT-Omega point cloud on the fitted field.** The orbit ends in a top-down view. Yellow shows the refined broadcast camera, and red shows VGGT-Omega's own cameras.
 
 | 10 s clip, San Diego | Week 1, Oshawa |
@@ -45,7 +51,10 @@ Click a preview to open the full H.264 video.
    - Median reprojection error is 2.8 px on the 10 s clip and 1.8 px on Week 1.
    - [docs/field_plane_fit.md](docs/field_plane_fit.md) gives the method and the evidence.
 5. **3D renders** (`render_vggt_scene_3d.py`). VGGT-Omega's points are placed through the refined cameras, so the floor paint lands on the fitted lines.
-6. **Players.** SAM-Body4D meshes and CoTracker trajectories read VGGT-Omega through an export in the 518×518 VGGT layout. Per-frame image→field homographies are in `field_homographies.json`.
+6. **Players on the field.**
+   - Teams come from jersey brightness (`classify_sam3_teams_by_torso_color.py`), with per-track corrections checked by eye in `data/team_review/`.
+   - `render_field_birds_eye.py` maps each player's foot point through that frame's homography in `field_homographies.json`.
+7. **Meshes and trajectories.** SAM-Body4D meshes and CoTracker trajectories read VGGT-Omega through an export in the 518×518 VGGT layout.
 
 ## Setup
 
@@ -107,7 +116,19 @@ python scripts/fit_field_plane_landmarks.py --predictions "$RUN/vggt_omega_predi
 # 5. 3D videos
 python scripts/render_vggt_scene_3d.py --predictions "$RUN/vggt_omega_predictions.npz" \
   --field-fit "$RUN/field_fit/field_plane_fit.json" --frames-dir "$FRAMES" --output-dir "$RUN/scene_3d" --timeline-fps 3
+
+# 6. teams (jersey brightness plus the checked review), then players on the fitted field
+python scripts/classify_sam3_teams_by_torso_color.py --classification-mode luma \
+  --review data/team_review/week1_1fps_undistorted.json --frames-dir "$FRAMES" \
+  --sam3-json "$SAM3/player_tracks_chunked_reboxed.json" --instance-mask-dir "$SAM3/player_instance_masks_chunked" \
+  --output-json "$RUN/teams/teams.json" --output-video "$RUN/teams/teams_review_h264.mp4" --fps 1
+python scripts/render_field_birds_eye.py --homographies "$RUN/field_fit/field_homographies.json" \
+  --sam3-json "$RUN/teams/teams.json" --instance-mask-dir "$SAM3/player_instance_masks_chunked" --frames-dir "$FRAMES" \
+  --output-video "$RUN/birds_eye/birds_eye_players_h264.mp4" --output-json "$RUN/birds_eye/birds_eye_players.json" \
+  --fps 1 --trail-seconds 0 --team-names "black=Oshawa,white=Toronto"
 ```
+
+To review the teams of a new clip, look at one crop per SAM3 track and write the corrections (`black`, `white`, `referee`, or `ignore` for the bench and stands) to a review JSON keyed by object id.
 
 **Labeling a new clip.**
 
@@ -116,7 +137,7 @@ python scripts/render_vggt_scene_3d.py --predictions "$RUN/vggt_omega_prediction
 3. Look through `$RUN/paint_masks/review/sheet_*.jpg` and write the corrections to a review JSON.
 4. Refit.
 
-**10 s clip.** The mask build adds the purple end-zone turf. The fit adds the two SAM2-tracked faceoff dots (`faceoff_clicks_to_sam2_prompts.py` → `track_sam2_clicks.py`), the only landmarks on the near side:
+**10 s clip.** The mask build adds the purple end-zone turf. The fit adds the two SAM2-tracked faceoff dots, the only landmarks on the near side. To make them, click the dots with `floor_homography_annotator.py --landmark-set faceoff_corners`, then run `faceoff_clicks_to_sam2_prompts.py` and `track_sam2_clicks.py`.
 
 ```bash
 RUN10=outputs/vggt_omega/clip10s_10fps_undistorted
@@ -129,6 +150,19 @@ python scripts/build_field_paint_masks.py --frames-dir data/frames_10fps_undisto
 python scripts/fit_field_plane_landmarks.py --predictions $RUN10/vggt_omega_predictions.npz \
   --frames-dir data/frames_10fps_undistorted --paint-masks $RUN10/paint_masks \
   --landmark faceoff_right_upper=$DM#6 --landmark faceoff_right_lower=$DM#7 --output-dir $RUN10/field_fit
+S10=outputs/sam3/text
+python scripts/rebox_sam3_json_from_instance_masks.py --source-json $S10/sam3_text_player_instances.json \
+  --instance-mask-dir $S10/sam3_text_player_instance_masks_undistorted --frames-dir data/frames_10fps_undistorted \
+  --output-json $S10/sam3_text_player_instances_reboxed_undistorted.json
+python scripts/classify_sam3_teams_by_torso_color.py --classification-mode luma \
+  --review data/team_review/clip10s_10fps_undistorted.json --frames-dir data/frames_10fps_undistorted \
+  --sam3-json $S10/sam3_text_player_instances_reboxed_undistorted.json \
+  --instance-mask-dir $S10/sam3_text_player_instance_masks_undistorted \
+  --output-json $RUN10/teams/teams.json --output-video $RUN10/teams/teams_review_h264.mp4 --fps 10
+python scripts/render_field_birds_eye.py --homographies $RUN10/field_fit/field_homographies.json \
+  --sam3-json $RUN10/teams/teams.json --instance-mask-dir $S10/sam3_text_player_instance_masks_undistorted \
+  --frames-dir data/frames_10fps_undistorted --output-video $RUN10/birds_eye/birds_eye_players_h264.mp4 \
+  --output-json $RUN10/birds_eye/birds_eye_players.json --fps 10 --team-names "black=San Diego,white=Colorado"
 ```
 
 **Players in the fitted scene.**
@@ -181,6 +215,8 @@ The meshes and trajectories use the rigid planar fit. The refined per-frame came
 | `paint_masks/` | labeled landmark masks, `labels.json` and review sheets |
 | `field_fit/` | `field_plane_fit.json` (plane, similarity, refined cameras, field dimensions, errors), `field_homographies.json`, `field_reprojection_h264.mp4`, `landmarks_on_field.jpg` |
 | `scene_3d/` | `vggt_scene_orbit_h264.mp4`, `vggt_scene_timeline_h264.mp4` |
+| `teams/` | per-detection teams (`teams.json`) and a review video |
+| `birds_eye/` | `birds_eye_players_h264.mp4` and per-frame player field positions |
 | `vggt_layout/` | the 518×518 VGGT-layout export for the mesh and trajectory scripts |
 
 All videos are H.264 (`yuv420p`) MP4s.
@@ -197,11 +233,17 @@ All videos are H.264 (`yuv420p`) MP4s.
 | `field_model.py` | NLL rulebook field: landmark distances, curves and drawing |
 | `fit_field_plane_landmarks.py` | floor-plane field fit and broadcast-camera refinement |
 | `render_vggt_scene_3d.py` | 3D orbit and per-frame timeline videos |
+| `classify_sam3_teams_by_torso_color.py` | teams from jersey brightness, with the checked review applied |
+| `render_field_birds_eye.py` | bird's-eye player video on the fitted field |
 | `export_vggt_omega_vggt_layout.py` | 518×518 VGGT-layout export |
-| `faceoff_clicks_to_sam2_prompts.py`, `track_sam2_clicks.py` | SAM2-tracked faceoff dots (10 s clip) |
+| `floor_homography_annotator.py`, `faceoff_clicks_to_sam2_prompts.py`, `track_sam2_clicks.py` | faceoff-dot clicks and their SAM2 tracking (10 s clip) |
 | `run_sam_body4d_from_sam3_boxes.py` | SAM-Body4D meshes from SAM3 boxes |
 | `render_sam_body4d_vggt_birds_eye.py`, `view_vggt_reconstruction.py` | meshes in the VGGT scene: top-down videos and `viser` viewer |
 | `run_cotracker_vggt_player_trajectories.py`, `render_cotracker_trajectories_source_fps.py` | CoTracker trajectories in field coordinates, rendered at source fps |
 | `run_cotracker_sourcefps_player_masks.py`, `view_cotracker_sourcefps_tracks.py` | CoTracker on source-fps SAM3 masks, `viser` viewer |
 
-Shared helpers: `video_utils.py`, `nll_field_geometry.py`, `run_vggt_birds_eye.py`, `render_birds_eye_locations.py`, `undistort_clip_from_field_lines.py`.
+Shared helpers:
+- `track_sam3_text.py` (run by `run_sam3_text_chunked.py`)
+- `video_utils.py`, `nll_field_geometry.py`
+- `run_vggt_birds_eye.py`, `render_birds_eye_locations.py` and `fit_floor_homography_from_feature_clicks.py` (geometry and drawing for the mesh and trajectory scripts)
+- `undistort_clip_from_field_lines.py`

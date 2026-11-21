@@ -1,0 +1,10 @@
+{
+ "_note": "Visual review of classify_sam3_teams_by_torso_color.py --classification-mode luma (one crop per SAM3 object id, mask outlined). Every id was checked; only corrections are listed. black = San Diego (black/yellow), white = Colorado (white). Ids 4-7 are blurred players on the bench in the zoomed opening frames.",
+ "3": "referee",
+ "4": "ignore",
+ "5": "ignore",
+ "6": "ignore",
+ "7": "ignore",
+ "11": "white",
+ "14": "white"
+}

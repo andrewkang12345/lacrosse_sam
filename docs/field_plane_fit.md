@@ -310,8 +310,8 @@ Outputs in `--output-dir`:
   cameras in field feet (rigid and refined), per-landmark and per-frame errors, landmark positions
   and frame status.
 - `field_homographies.json`: per-frame image→field homographies in the `floor_homography_matrix_v1`
-  schema, with `field_dims`. `render_birds_eye_locations.py` and `render_camera_homography_overlay.py`
-  read it directly. This is the recommended way to map player foot pixels to the field.
+  schema, with `field_dims`. This is the recommended way to map player foot pixels to the field;
+  `render_field_birds_eye.py` uses it for the bird's-eye player videos.
 - `field_reprojection_h264.mp4`: every frame with the rigid fit (top) and the refined fit (bottom) drawn on it.
 - `landmarks_on_field.jpg`: stage-1 lifted landmarks on the field diagram.
 
