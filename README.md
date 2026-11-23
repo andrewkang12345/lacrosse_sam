@@ -48,12 +48,15 @@ Click a preview to open the full H.264 video.
    - Landmark pixels are lifted onto that plane by ray–plane intersection.
    - A rigid similarity maps the plane to the NLL rulebook field (`field_model.py`).
    - The camera is then refined: one shared camera position, per-frame pan, tilt, roll and zoom, and the arena's corner radius.
-   - Median reprojection error is 2.8 px on the 10 s clip and 1.8 px on Week 1.
+   - Background points tracked between neighbouring frames tie each frame's camera to the measured image motion.
+   - `camera_motion_check` in the fit summary lists frames where the fitted camera disagrees with that motion by more than 5 px.
+   - Median reprojection error is 2.9 px on the 10 s clip and 1.8 px on Week 1.
    - [docs/field_plane_fit.md](docs/field_plane_fit.md) gives the method and the evidence.
 5. **3D renders** (`render_vggt_scene_3d.py`). VGGT-Omega's points are placed through the refined cameras, so the floor paint lands on the fitted lines.
 6. **Players on the field.**
    - Teams come from jersey brightness (`classify_sam3_teams_by_torso_color.py`), with per-track corrections checked by eye in `data/team_review/`.
    - `render_field_birds_eye.py` maps each player's foot point through that frame's homography in `field_homographies.json`.
+   - Tracking glitches are replaced by interpolation along each player's track. These are points more than 4 ft off the track's running median, and whole frames where SAM3 shifted IDs between players. Gaps of up to 1 s are filled the same way.
 7. **Meshes and trajectories.** SAM-Body4D meshes and CoTracker trajectories read VGGT-Omega through an export in the 518×518 VGGT layout.
 
 ## Setup
@@ -75,7 +78,7 @@ export HF_TOKEN='your_huggingface_token'   # SAM3; never commit it
 
 ## Run
 
-These commands are for Week 1; the 10 s clip's differences follow.
+These commands are for Week 1; the 10 s clip's differences follow. [docs/week1_10fps_estimate.md](docs/week1_10fps_estimate.md) estimates the time and changes needed to run Week 1 at 10 fps.
 
 ```bash
 export RAW=data/week1_112825_osh_tor_0820_1053_frames_1fps
@@ -220,6 +223,10 @@ The meshes and trajectories use the rigid planar fit. The refined per-frame came
 | `vggt_layout/` | the 518×518 VGGT-layout export for the mesh and trajectory scripts |
 
 All videos are H.264 (`yuv420p`) MP4s.
+
+Two checks in the JSON outputs flag frames to look at, so a clip does not have to be watched in full:
+- `camera_motion_check` in `field_plane_fit.json`: frames where the fitted camera disagrees with the tracked image motion by more than 5 px (clips at 4 fps or more).
+- `cleaning` in `birds_eye_players.json`: frames where SAM3 shifted IDs between players, and how many points were dropped and interpolated.
 
 ## Scripts
 

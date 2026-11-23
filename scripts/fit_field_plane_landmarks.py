@@ -601,6 +601,73 @@ def build_frame_observations(observations: list[Observation], max_per_obs: int, 
     return per_frame
 
 
+@dataclass
+class MotionPair:
+    a: int
+    b: int
+    pa: np.ndarray  # (N, 2) pixels in frame a
+    pb: np.ndarray  # (N, 2) the same scene points in frame b
+    inlier_ratio: float
+
+
+def frame_motion_pairs(frames_dir: Path, frame_names: list[str], max_points: int) -> list[MotionPair]:
+    """Background points tracked between neighbouring frames.
+
+    The broadcast camera pans, tilts and zooms about a fixed centre, so every static
+    point (floor, boards, stands) moves by one homography between frames, whatever its
+    depth. Points are KLT-tracked forward and back, and the RANSAC homography inliers
+    are kept; moving players and static screen graphics fall out as outliers. Pairs with
+    few inliers (cuts, heavy blur) are skipped."""
+    rng = np.random.default_rng(11)
+    pairs = []
+    prev = None
+    for i, name in enumerate(frame_names):
+        gray = cv2.cvtColor(cv2.imread(str(frames_dir / name), cv2.IMREAD_COLOR), cv2.COLOR_BGR2GRAY)
+        if prev is not None:
+            p0 = cv2.goodFeaturesToTrack(prev, 1500, 0.01, 10, mask=(prev > 8).astype(np.uint8))
+            if p0 is not None and len(p0) >= 50:
+                p1, st1, _ = cv2.calcOpticalFlowPyrLK(prev, gray, p0, None, winSize=(31, 31), maxLevel=5)
+                back, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev, p1, None, winSize=(31, 31), maxLevel=5)
+                ok = (st1[:, 0] == 1) & (st2[:, 0] == 1) & (np.linalg.norm(back - p0, axis=2)[:, 0] < 1.0)
+                if ok.sum() >= 50:
+                    a, b = p0[ok, 0], p1[ok, 0]
+                    _, inl = cv2.findHomography(a, b, cv2.RANSAC, 1.5)
+                    inl = inl[:, 0].astype(bool) if inl is not None else np.zeros(len(a), bool)
+                    ratio = float(inl.mean())
+                    if inl.sum() >= 30 and ratio >= 0.5:
+                        keep = np.flatnonzero(inl)
+                        if len(keep) > max_points:
+                            keep = rng.choice(keep, max_points, replace=False)
+                        pairs.append(MotionPair(i - 1, i, a[keep].astype(float), b[keep].astype(float), ratio))
+        prev = gray
+    return pairs
+
+
+def motion_transfer(cams: Cameras, a: int, b: int, pa: np.ndarray) -> np.ndarray:
+    """Map pixels of frame a into frame b through the cameras, assuming a shared centre."""
+    H = cams.K[b] @ cams.R[b] @ cams.R[a].T @ np.linalg.inv(cams.K[a])
+    q = np.column_stack([pa, np.ones(len(pa))]) @ H.T
+    return q[:, :2] / q[:, 2:3]
+
+
+def camera_motion_check(cams: Cameras, pairs: list[MotionPair], threshold_px: float, frame_names: list[str]) -> dict:
+    """How far the fitted cameras move the tracked background points from where they
+    were measured in the next frame (median per pair). A camera that jumps while the
+    image does not shows up here without looking at any frame."""
+    errors = {p.b: float(np.median(np.linalg.norm(motion_transfer(cams, p.a, p.b, p.pa) - p.pb, axis=1))) for p in pairs if np.allclose(cams.C[p.a], cams.C[p.b])}
+    if not errors:
+        return {"pairs_checked": 0}
+    values = np.asarray(list(errors.values()))
+    return {
+        "pairs_checked": len(errors),
+        "median_px": float(np.median(values)),
+        "p95_px": float(np.percentile(values, 95)),
+        "max_px": float(values.max()),
+        "threshold_px": threshold_px,
+        "frames_over_threshold": {frame_names[b]: round(e, 1) for b, e in sorted(errors.items()) if e > threshold_px},
+    }
+
+
 def smooth_pairs(cams: Cameras, max_rotation_deg: float) -> list[tuple[int, int]]:
     """Neighbouring frames with small relative rotation (i.e. no broadcast cut)."""
     pairs = []
@@ -644,11 +711,15 @@ class Stage2Problem:
 
     Parameter vector: [camera centre (3), field dimensions (m), per-frame deltas (4 S)].
     Residuals are landmark distances on the floor divided by the local
-    floor-feet-per-pixel of the current camera, i.e. approximately image pixels.
+    floor-feet-per-pixel of the current camera, i.e. approximately image pixels,
+    plus the image distance between tracked background points in the next frame
+    and where the two frames' cameras send them.
     """
 
-    def __init__(self, rigid: Cameras, per_frame: dict[int, list[FrameObs]], dist: FieldModel, args: argparse.Namespace, dim_names: tuple[str, ...]):
+    def __init__(self, rigid: Cameras, per_frame: dict[int, list[FrameObs]], dist: FieldModel, args: argparse.Namespace, dim_names: tuple[str, ...],
+                 motion: list[MotionPair]):
         self.rigid, self.per_frame, self.dist, self.args = rigid, per_frame, dist, args
+        self.motion = motion
         self.dim_names = dim_names
         self.m = len(dim_names)
         self.dims0 = dist.dims.vector(dim_names)
@@ -668,6 +739,10 @@ class Stage2Problem:
         rows += 4 * len(self.pairs)
         self.dims_start = rows
         rows += self.m
+        self.motion_rows = []
+        for pair in motion:
+            self.motion_rows.append((rows, rows + 2 * len(pair.pa)))
+            rows += 2 * len(pair.pa)
         self.n_rows = rows
 
     def initial(self, centre: np.ndarray) -> np.ndarray:
@@ -707,7 +782,9 @@ class Stage2Problem:
             b = np.asarray([p[1] for p in self.pairs])
             out[self.smooth_start : self.dims_start] = ((motion[b] - motion[a]) * self.args.smooth_weight).ravel()
         if self.m:
-            out[self.dims_start :] = (x[3 : self.off] - self.dims0) / self.args.dims_prior_sigma_ft * self.args.robust_scale_px
+            out[self.dims_start : self.dims_start + self.m] = (x[3 : self.off] - self.dims0) / self.args.dims_prior_sigma_ft * self.args.robust_scale_px
+        for pair, (start, stop) in zip(self.motion, self.motion_rows):
+            out[start:stop] = (np.clip(motion_transfer(cams, pair.a, pair.b, pair.pa) - pair.pb, -400.0, 400.0) * self.args.motion_weight).ravel()
         return out
 
     def sparsity(self) -> lil_matrix:
@@ -728,6 +805,10 @@ class Stage2Problem:
                 sp[self.smooth_start + 4 * p + j, off + 4 * b + j] = 1
         for j in range(self.m):
             sp[self.dims_start + j, 3 + j] = 1
+        for pair, (start, stop) in zip(self.motion, self.motion_rows):
+            sp[start:stop, :3] = 1
+            sp[start:stop, off + 4 * pair.a : off + 4 * pair.a + 4] = 1
+            sp[start:stop, off + 4 * pair.b : off + 4 * pair.b + 4] = 1
         return sp
 
 
@@ -757,9 +838,10 @@ def stage2_refine(
     dist: FieldModel,
     args: argparse.Namespace,
     dim_names: tuple[str, ...],
+    motion: list[MotionPair],
     warm_start: np.ndarray | None = None,
 ) -> tuple[Cameras, FieldDims, dict, np.ndarray]:
-    problem = Stage2Problem(rigid, per_frame, dist, args, dim_names)
+    problem = Stage2Problem(rigid, per_frame, dist, args, dim_names, motion)
     S = problem.S
     scan, centre0, look_at = _initial_centres(problem, rigid, args)
     starts = [warm_start] if warm_start is not None else [x for _, x in scan[:2]]
@@ -791,6 +873,7 @@ def stage2_refine(
         "estimated_field_dims": list(dim_names),
         "frames_with_landmarks": int(sum(1 for i in range(S) if per_frame.get(i))),
         "smoothness_pairs": len(problem.pairs),
+        "motion_pairs": len(motion),
         "median_residual_rotation_deg": float(np.median(np.rad2deg(np.linalg.norm(delta[:, :3], axis=1)))),
         "median_abs_residual_zoom_pct": float(np.median(np.abs(np.expm1(delta[:, 3]))) * 100.0),
         "nfev": int(best.nfev),
@@ -1047,6 +1130,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--points-per-observation", type=float, default=40.0)
     parser.add_argument("--prior-weight", type=float, default=0.03)
     parser.add_argument("--smooth-weight", type=float, default=0.3)
+    parser.add_argument("--motion-weight", type=float, default=1.0,
+                        help="Weight of tracked background points between neighbouring frames in the camera refinement.")
+    parser.add_argument("--motion-points", type=int, default=40, help="Tracked background points used per neighbouring-frame pair.")
+    parser.add_argument("--motion-max-interval-seconds", type=float, default=0.25,
+                        help="Track background points (refinement term and motion check) only when frames are at most this far apart (1 / --fps).")
+    parser.add_argument("--motion-check-px", type=float, default=5.0, help="Neighbouring-frame camera motion error above which a frame is listed in the motion check.")
     parser.add_argument("--cut-rotation-deg", type=float, default=4.0, help="Neighbouring frames rotating more than this are treated as a cut (no smoothing).")
     parser.add_argument("--refine-iterations", type=int, default=60)
     parser.add_argument("--outlier-frame-px", type=float, default=15.0, help="Frames above this median error get their own camera (broadcast cuts).")
@@ -1117,17 +1206,20 @@ def main() -> None:
     rigid_H = [field_to_image_homography(rigid_cams, i) for i in range(len(frame_names))]
     rigid_errors = reprojection_errors(rigid_H, observations, shape, default_dims)
 
+    # Tracking is only reliable between frames close in time (10 fps clips, not 1 fps samples).
+    tracked_motion = frame_motion_pairs(Path(args.frames_dir), frame_names, args.motion_points) if 1.0 / args.fps <= args.motion_max_interval_seconds else []
     dims = default_dims
     if args.no_camera_refinement:
         final_cams, stage2 = rigid_cams, {"skipped": True}
     else:
         dim_names = dims_to_estimate(args.estimate_dims, {o.name for o in observations})
         per_frame = build_frame_observations(observations, args.max_points_per_mask, args.points_per_observation)
-        final_cams, dims, stage2, x = stage2_refine(rigid_cams, per_frame, dist, args, dim_names)
+        final_cams, dims, stage2, x = stage2_refine(rigid_cams, per_frame, dist, args, dim_names, tracked_motion)
         off = off_camera_frames(final_cams, observations, shape, args.outlier_frame_px, dims)
         if off:  # refit the shared camera without the frames it cannot explain
             shared_frames = {i: v for i, v in per_frame.items() if i not in off}
-            final_cams, dims, stage2, x = stage2_refine(rigid_cams, shared_frames, dist, args, dim_names, warm_start=x)
+            shared_motion = [p for p in tracked_motion if p.a not in off and p.b not in off]
+            final_cams, dims, stage2, x = stage2_refine(rigid_cams, shared_frames, dist, args, dim_names, shared_motion, warm_start=x)
             off = off_camera_frames(final_cams, observations, shape, args.outlier_frame_px, dims)
         final_cams, own_status = fit_own_cameras(final_cams, rigid_cams, off, observations, per_frame, dims, shape, args)
         frame_status = {i: ("shared_camera" if per_frame.get(i) else "no_landmarks") for i in range(len(frame_names))}
@@ -1136,6 +1228,7 @@ def main() -> None:
         stage2["frame_status"] = {frame_names[i]: v for i, v in frame_status.items()}
     final_H = [field_to_image_homography(final_cams, i) for i in range(len(frame_names))]
     final_errors = reprojection_errors(final_H, observations, shape, dims)
+    motion_check = camera_motion_check(final_cams, tracked_motion, args.motion_check_px, frame_names)
 
     positions = {"rigid": landmark_positions(rigid_cams, observations, default_dims), "refined": landmark_positions(final_cams, observations, dims)}
     frames_dir = Path(args.frames_dir)
@@ -1184,6 +1277,7 @@ def main() -> None:
         "landmark_positions_ft": positions,
         "reprojection_rigid": rigid_errors,
         "reprojection_refined": final_errors,
+        "camera_motion_check": motion_check,
         "cameras_field_ft": {
             "note": "x_img ~ K R (X - C), X in field feet with z up; K in original-image pixels.",
             "rigid": {"K": rigid_cams.K.tolist(), "R": rigid_cams.R.tolist(), "C": rigid_cams.C.tolist()},
@@ -1199,6 +1293,7 @@ def main() -> None:
         "stage1_residual_ft": {k: round(v["median_ft"], 2) for k, v in stage1["residual_ft_by_landmark"].items()},
         "reprojection_rigid_median_px": round(rigid_errors["median_px"], 2),
         "reprojection_refined_median_px": round(final_errors["median_px"], 2),
+        "camera_motion_check": {k: (round(v, 2) if isinstance(v, float) else v) for k, v in motion_check.items()},
         "reprojection_rigid_by_landmark": {k: round(v["median_px"], 1) for k, v in rigid_errors["by_landmark"].items()},
         "reprojection_refined_by_landmark": {k: round(v["median_px"], 1) for k, v in final_errors["by_landmark"].items()},
         "field_dims": {k: round(v["fitted_ft"], 2) for k, v in dims_report.items() if v["estimated"]},

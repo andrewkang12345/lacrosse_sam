@@ -23,7 +23,7 @@ the top-down view lands on the fitted lines.
 | clip | fit | median reprojection error | 90th percentile |
 |---|---|---|---|
 | 10 s, 10 fps | depth-based fit (goalie-anchor similarity) | 35.6 px | 160 px |
-| | **plane fit** | **2.8 px** | **8.3 px** |
+| | **plane fit** | **2.9 px** | **8.4 px** |
 | Week 1, 1 fps | depth-based fit (huddle/goalie anchors, used by the SAM-Body4D fusion)\* | 9.4 px | 55 px |
 | | **plane fit** | **1.8 px** | **5.4 px** |
 
@@ -54,7 +54,7 @@ below), and that is only possible when lifting depends on the camera alone, not 
 **2. The reconstruction itself is projectively distorted.** For zoomed broadcast footage, VGGT
 confuses zoom with dolly. In the 10 s clip, VGGT-Omega puts the camera about 290 ft from the play
 with a 9° field of view, and slides it about 90 ft along its viewing direction while the operator
-zooms. The refined camera is 180 ft away with a 17° field of view. A camera that is too far and
+zooms. The refined camera is 180 ft away with a 16° field of view. A camera that is too far and
 too telephoto flattens perspective. The reconstructed floor is then not a scaled copy of the real
 one: it is compressed more on the far side than the near side. Because this distortion and the
 frame-to-frame drift differ per frame, no single similarity, affine or plane homography can match
@@ -189,6 +189,19 @@ broadcast camera physically is:
 - **One shared camera centre** for the clip.
 - **Per-frame pan, tilt, roll and zoom corrections**, bounded to 20° and a factor of 2.
 - **The arena's corner radius**, shared by all frames, with a soft prior.
+- **Measured camera motion between neighbouring frames.**
+  - Background points are KLT-tracked from each frame to the next and checked forward and back.
+  - The RANSAC homography inliers are kept, about 40 per frame pair. Moving players and fixed
+    screen graphics fall out as outliers, and pairs with few inliers (cuts, heavy blur) are skipped.
+  - A camera that turns and zooms about a fixed centre moves every static point by
+    K<sub>b</sub> R<sub>b</sub> R<sub>a</sub><sup>T</sup> K<sub>a</sub><sup>−1</sup>, whatever its
+    depth. The image distance between that prediction and the tracked point is a residual.
+  - Points are tracked only when neighbouring frames are at most 0.25 s apart (the 10 s clip at
+    10 fps, not Week 1 at 1 fps).
+  - This ties each frame's pan, tilt, roll and zoom to its neighbours'. Without it, stretches that
+    show only two landmarks leave the camera underdetermined. Frames 22–45 of the 10 s clip show
+    only the right restraining line and the far board base. Fitted without this term, the camera
+    there tilts 60 px in one frame while the image barely moves vertically.
 - **Priors**: a weak pull towards VGGT-Omega's own per-frame pointing, plus smoothness between
   neighbouring frames. Smoothing is switched off across broadcast cuts.
 
@@ -234,14 +247,14 @@ Positions of each landmark's pixels on the field, through the refined cameras:
 | right restraining line | x = 142.5 ft | 142.47 ft (IQR 0.28) | 142.50 ft (IQR 0.29) |
 | creases (circle fit) | centre x = 12 / 188 ft, r = 9.25 ft | 187.9 ft, r 8.8 | 11.6 / 188.2 ft, r 9.1 / 9.0 |
 | far board base | rounded outline | median 0.42 ft off | median 0.64 ft off |
-| faceoff dots | (157.5, 70) / (157.5, 15) | (157.5, 70.5) / (157.8, 15.0) | not visible |
+| faceoff dots | (157.5, 70) / (157.5, 15) | (157.6, 70.5) / (157.7, 15.0) | not visible |
 
 Crease radii are measured to the centre of a 5 in line.
 
 - **Held-out faceoff dots (10 s clip).** The dots are the only near-side landmarks in this clip, so
   each is held out in turn:
-  - With only the upper dot in the fit, the lower dot lands 0.7 ft from its spot.
-  - With only the lower dot in the fit, the upper dot lands 1.35 ft from its spot.
+  - With only the upper dot in the fit, the lower dot lands 0.65 ft from its spot.
+  - With only the lower dot in the fit, the upper dot lands 1.33 ft from its spot.
 
   The fit uses both. Without any dot, nothing fixes the near side. Camera distance then trades
   against zoom, and the near dot drifts by about 3 ft while every far-side landmark still fits.
@@ -252,22 +265,29 @@ Crease radii are measured to the centre of a 5 in line.
 
   ![Week 1 held-out faceoff dots: green circle = the fit's projected spot](figures/week1_heldout_faceoff_dots.jpg)
 - **Camera position.**
-  - 10 s clip: the recovered camera is 113 ft behind the near sideline and 50 ft up, level with
+  - 10 s clip: the recovered camera is 114 ft behind the near sideline and 50 ft up, level with
     centre floor. VGGT-Omega's own estimate is 216 ft back and 75 ft up.
   - Week 1: the camera is 34 ft behind the near sideline and 20 ft up, with a 36° field of view.
     148 of 153 frames fit this shared camera, 4 (cuts and close-ups) have their own camera, 1 has
     no visible landmarks, and none are flagged `unreliable`.
+- **Camera motion check (10 s clip).** Over 97 neighbouring-frame pairs, the refined cameras move
+  the tracked background points to within 1.2 px of where they are measured (median). The worst
+  pair is 4.4 px, so no frame is over 5 px. Fitted without the motion term, the same cameras have
+  pairs at 83 px (frame 28) and 18 px (frame 46, where the faceoff dots enter the fit).
+  - Week 1 is sampled at 1 fps, so its frames are 1 s apart, too far to track reliably.
+  - Tracking is therefore used only when frames are at most 0.25 s apart, and Week 1 has
+    neither the term nor the check.
 - **Per landmark** (median / 90th percentile px):
 
   | landmark | 10 s clip | Week 1 |
   |---|---|---|
-  | midfield line | 4.6 / 9.1 | 2.5 / 5.2 |
+  | midfield line | 4.8 / 9.6 | 2.5 / 5.2 |
   | left restraining line | 3.1 / 5.4 | 1.5 / 3.0 |
-  | right restraining line | 2.9 / 6.8 | 1.8 / 4.3 |
+  | right restraining line | 2.9 / 7.0 | 1.8 / 4.3 |
   | left crease | not visible | 1.9 / 5.2 |
-  | right crease | 3.1 / 11.1 | 2.4 / 6.9 |
-  | far board base | 2.4 / 9.3 | 1.8 / 10.4 |
-  | faceoff dots (upper / lower) | 5.7 / 10.2, 7.7 / 20.9 | not used |
+  | right crease | 3.2 / 10.7 | 2.4 / 6.9 |
+  | far board base | 2.5 / 9.3 | 1.8 / 10.4 |
+  | faceoff dots (upper / lower) | 5.4 / 11.0, 7.0 / 20.1 | not used |
 
 ## Running it
 
@@ -299,6 +319,8 @@ python scripts/fit_field_plane_landmarks.py --predictions "$RUN/vggt_omega_predi
 
 **Options.**
 
+- `--motion-max-interval-seconds` (0.25) is the largest frame spacing (1 / `--fps`) at which
+  background points are tracked at all.
 - `--estimate-dims none` keeps the rulebook floor exactly.
 - `--estimate-dims corner_radius,crease_radius,...` frees more dimensions as a check against
   the rulebook.
@@ -309,6 +331,12 @@ Outputs in `--output-dir`:
 - `field_plane_fit.json`: the plane, the plane→field similarity, the fitted `field_dims`, per-frame
   cameras in field feet (rigid and refined), per-landmark and per-frame errors, landmark positions
   and frame status.
+  - It also holds `camera_motion_check`: how far the refined cameras move the tracked background
+    points from where they are measured in the next frame.
+  - The check gives the median, 95th percentile and maximum, and lists every frame over
+    `--motion-check-px` (5 px).
+  - The fit's printed summary carries the same block, so a camera jump shows up without
+    looking at any video.
 - `field_homographies.json`: per-frame image→field homographies in the `floor_homography_matrix_v1`
   schema, with `field_dims`. This is the recommended way to map player foot pixels to the field;
   `render_field_birds_eye.py` uses it for the bird's-eye player videos.
