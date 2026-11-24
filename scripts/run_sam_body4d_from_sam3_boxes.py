@@ -1,3 +1,10 @@
+"""SAM-Body4D body meshes for every SAM3 player box, per frame.
+
+Each frame's SAM3 boxes (as box masks) prompt SAM-Body4D; the meshes are saved per SAM3
+ID in SAM-Body4D's camera frame, with the focal length they were fitted at, and drawn
+over the frames in --output-video.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -144,10 +151,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", default="third_party/sam-body4d")
     parser.add_argument("--config", default="third_party/sam-body4d/configs/body4d.yaml")
-    parser.add_argument("--frames-dir", default="data/frames_10fps")
-    parser.add_argument("--sam3-json", default="outputs/sam3_text_lacrosse_player_masks.json")
-    parser.add_argument("--output-dir", default="outputs/sam_body4d_sam3_boxes")
-    parser.add_argument("--output-video", default="outputs/sam_body4d_sam3_boxes_h264.mp4")
+    parser.add_argument("--frames-dir", required=True)
+    parser.add_argument("--sam3-json", required=True, help="SAM3 player detections with boxes (rebox_sam3_json_from_instance_masks.py).")
+    parser.add_argument("--output-dir", required=True, help="Writes mesh_4d_individual/<id>/NNNNNNNN.ply and focal_4d_individual/<id>/NNNNNNNN.json.")
+    parser.add_argument("--output-video", required=True)
     parser.add_argument("--render-mode", choices=["overlay", "white"], default="overlay")
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--max-frames", type=int, default=0)

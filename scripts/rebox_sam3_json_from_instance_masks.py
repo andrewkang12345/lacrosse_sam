@@ -1,3 +1,10 @@
+"""SAM3 detection boxes recomputed from (undistorted) instance masks.
+
+Undistortion moves the masks; the boxes of the detections JSON are replaced by the
+boxes of the remapped masks, and detections smaller than --min-width x --min-height are
+dropped.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -16,7 +23,7 @@ def mask_box(mask: np.ndarray) -> list[float] | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Recompute SAM3 boxes from remapped per-instance masks.")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source-json", required=True)
     parser.add_argument("--instance-mask-dir", required=True)
     parser.add_argument("--frames-dir", required=True)

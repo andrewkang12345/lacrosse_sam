@@ -1,33 +1,41 @@
 """Bird's-eye video of the players on the fitted NLL field.
 
-Every SAM3 player's floor point (the bottom of its mask) is mapped to field feet
-through that frame's refined image->field homography from
-fit_field_plane_landmarks.py (field_homographies.json) and drawn as a circle in
-its team colour, with a short trail. The field is drawn with the arena's fitted
-dimensions, and the part of the floor the camera sees in each frame is shaded.
-Frames without a homography (no landmarks visible, or flagged unreliable) show
-no players.
+Every SAM3 player's floor point is mapped to field feet through that frame's refined
+image->field homography from fit_field_plane_landmarks.py (field_homographies.json) and
+drawn as a circle in its team colour, with a short trail. The floor point is the lowest
+row of the player's mask, at the median column of the mask's lower half: the legs and
+hips, so it does not swing from foot to foot with each stride. The field is drawn with
+the arena's fitted dimensions, and the part of the floor the camera sees in each frame
+is shaded. Only frames on the broadcast camera are measured. Close-ups and other cuts
+(fit status closeup, own_camera, no_landmarks or unreliable) give no positions, because
+a few landmarks seen by a different camera do not pin down its position.
 
-Tracking glitches are replaced by interpolation along each player's track. A
-point more than --outlier-ft from the median of its own track within
-±--outlier-window-seconds is an outlier. A frame where at least two points, and
-at least 40% of the points that could be tested, are outliers is a bad frame
-(for example SAM3 IDs shifted between neighbouring players), and all its points
-are dropped. Each track is then filled by linear interpolation wherever its kept
-points on either side are at most --max-gap-seconds apart. Interpolated points
-have no image point and are counted in the frame header.
+Positions come from field_player_tracks.py, which turns the floor points into smoothed
+player tracks:
+- each floor point is weighted by its uncertainty in feet, which is larger far from the
+  camera and when the player is partly hidden (feet behind another player, or cut by
+  the side of the image);
+- outliers and bad frames (SAM3 IDs shifted between neighbouring players) are dropped;
+- tracks are split where SAM3 moved an ID to a different player, and the pieces are
+  rejoined by team and motion;
+- gaps up to --max-gap-seconds are filled by the smoother, also through frames where
+  the camera was lost briefly; longer shots show no players.
+With --jersey-reads (the crop reads of jersey_number_sheets.py), a dot is labelled with
+its jersey number when combine_jersey_numbers.py gives its track one: the track's read
+segments agree on one number and no other track of that team has it at the same time.
+Dots of unread or conflicting tracks have no label.
 
 Teams come from classify_sam3_teams_by_torso_color.py (`teams` per detection);
 detections marked `ignore` (bench, stands) are skipped, as are players whose
 feet are cut off by the bottom of the image or whose floor point lands off the
-field. A SAM3 JSON without teams draws every player in one colour.
+field, and masks under 200 pixels (SAM3 remnants). A SAM3 JSON without teams
+draws every player in one colour.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -35,6 +43,8 @@ import imageio.v2 as imageio
 import numpy as np
 
 import field_model as fm
+import field_player_tracks as fpt
+from combine_jersey_numbers import jersey_numbers
 from fit_field_plane_landmarks import field_canvas
 
 TEAM_STYLE_BGR = {  # fill, outline
@@ -43,9 +53,9 @@ TEAM_STYLE_BGR = {  # fill, outline
     "referee": ((150, 150, 150), (20, 20, 20)),
     "unknown": ((40, 200, 255), (20, 20, 20)),
 }
-STATUS_TEXT = {"shared_camera": "broadcast camera", "own_camera": "separate camera (cut)", "no_landmarks": "no landmarks: camera from neighbouring frames"}
+STATUS_TEXT = {"shared_camera": "broadcast camera"}
+BROADCAST_STATUS = {"shared_camera", "rigid"}
 HEADER_PX, FOOTER_PX = 44, 40
-BAD_FRAME_SHARE = 0.4  # share of a frame's tested points that are outliers for it to count as a bad frame
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,11 +68,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", default=None, help="Per-frame player field positions.")
     parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--trail-seconds", type=float, default=2.0, help="0 disables trails (sensible at 1 fps).")
-    parser.add_argument("--outlier-ft", type=float, default=4.0, help="Distance from the track's running median that marks a point as an outlier.")
-    parser.add_argument("--outlier-window-seconds", type=float, default=0.3,
-                        help="Half-width of the running median; shorter than one frame disables the outlier test.")
-    parser.add_argument("--max-gap-seconds", type=float, default=1.0, help="Longest span between kept points filled by interpolation; 0 disables filling.")
+    parser.add_argument("--max-speed-ft-per-s", type=float, default=30.0, help="Fastest a player runs: track pieces further apart than this are not joined.")
+    parser.add_argument("--position-noise-ft", type=float, default=3.0, help="Floor-point noise allowed on top of --max-speed-ft-per-s.")
+    parser.add_argument("--max-gap-seconds", type=float, default=1.0, help="Longest gap a track is filled and joined across.")
     parser.add_argument("--team-names", default="", help='Legend names, e.g. "black=San Diego,white=Colorado".')
+    parser.add_argument("--jersey-reads", default=None, help="Crop reads JSON (data/jersey_number_review/<clip>_reads.json); labels dots with jersey numbers.")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     return parser.parse_args()
@@ -77,11 +87,10 @@ def load_masks(mask_dir: Path, frame_idx: int) -> dict[int, np.ndarray]:
 
 
 def foot_point(mask: np.ndarray | None, box: list[float]) -> tuple[float, float]:
-    """Bottom of the player's mask (median x of its lowest 10% of rows), else the box bottom centre."""
+    """Lowest row of the mask, at the median column of its lower half; else the box bottom centre."""
     if mask is not None and mask.any():
         ys, xs = np.nonzero(mask)
-        low = ys >= np.quantile(ys, 0.90)
-        return float(np.median(xs[low])), float(ys.max())
+        return float(np.median(xs[ys >= np.median(ys)])), float(ys.max())
     x1, _, x2, y2 = (float(v) for v in box)
     return 0.5 * (x1 + x2), y2
 
@@ -91,16 +100,23 @@ def apply_h(H: np.ndarray, xy: tuple[float, float]) -> np.ndarray:
     return q[:2] / q[2]
 
 
+def h_jacobian(H: np.ndarray, xy: tuple[float, float]) -> np.ndarray:
+    """Field feet per image pixel at xy; columns are the image x and y directions."""
+    q = H @ np.array([xy[0], xy[1], 1.0])
+    p = q[:2] / q[2]
+    return (H[:2, :2] - np.outer(p, H[2, :2])) / q[2]
+
+
 def draw_player(img: np.ndarray, p: tuple[int, int], team: str, label: str) -> None:
     fill, outline = TEAM_STYLE_BGR.get(team, TEAM_STYLE_BGR["unknown"])
     cv2.circle(img, p, 10, outline, -1, cv2.LINE_AA)
     cv2.circle(img, p, 8, fill, -1, cv2.LINE_AA)
     if label:
-        cv2.putText(img, label, (p[0] + 9, p[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(img, label, (p[0] + 9, p[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (240, 240, 240), 1, cv2.LINE_AA)
+        cv2.putText(img, label, (p[0] + 9, p[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(img, label, (p[0] + 9, p[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (240, 240, 240), 1, cv2.LINE_AA)
 
 
-def legend(width: int, names: dict[str, str]) -> np.ndarray:
+def legend(width: int, names: dict[str, str], floor_in_view: bool = True) -> np.ndarray:
     bar = np.full((FOOTER_PX, width, 3), (28, 74, 54), np.uint8)  # the field canvas surround
     x = 16
     for team in ("black", "white", "referee"):
@@ -108,69 +124,45 @@ def legend(width: int, names: dict[str, str]) -> np.ndarray:
         text = names.get(team, team)
         cv2.putText(bar, text, (x + 26, FOOTER_PX // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1, cv2.LINE_AA)
         x += 46 + cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)[0][0]
-    cv2.rectangle(bar, (x, 12), (x + 26, FOOTER_PX - 12), (120, 170, 150), -1)
-    cv2.putText(bar, "floor in view this frame", (x + 34, FOOTER_PX // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1, cv2.LINE_AA)
+    if floor_in_view:
+        cv2.rectangle(bar, (x, 12), (x + 26, FOOTER_PX - 12), (120, 170, 150), -1)
+        cv2.putText(bar, "floor in view this frame", (x + 34, FOOTER_PX // 2 + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1, cv2.LINE_AA)
     return bar
 
 
-def clean_tracks(raw: list[list[dict]], has_fit: list[bool], window: int, outlier_ft: float, max_gap: int) -> tuple[list[list[dict]], dict]:
-    """Drop outlier points and bad frames, then fill each track by linear interpolation (windows and gaps in frames)."""
-    tracks: dict[int, dict[int, dict]] = {}
-    for idx, players in enumerate(raw):
-        for item in players:
-            tracks.setdefault(item["object_id"], {})[idx] = item
-    tested, outliers, dropped = Counter(), Counter(), set()
-    if window >= 1:
-        for oid, samples in tracks.items():
-            frames = sorted(samples)
-            for f in frames:
-                near = [samples[g]["field_point_ft"] for g in frames if abs(g - f) <= window]
-                if len(near) < 3:
-                    continue
-                tested[f] += 1
-                if np.linalg.norm(np.subtract(samples[f]["field_point_ft"], np.median(near, axis=0))) > outlier_ft:
-                    outliers[f] += 1
-                    dropped.add((f, oid))
-    bad = {f for f in tested if outliers[f] >= 2 and outliers[f] >= BAD_FRAME_SHARE * tested[f]}
-
-    cleaned: list[list[dict]] = [[] for _ in raw]
-    kept_count = interpolated = 0
-    for oid, samples in tracks.items():
-        kept = {f: s for f, s in samples.items() if f not in bad and (f, oid) not in dropped}
-        if not kept:
-            continue
-        team = Counter(s["team"] for s in kept.values()).most_common(1)[0][0]
-        frames = sorted(kept)
-        for f in frames:
-            cleaned[f].append({**kept[f], "interpolated": False})
-        kept_count += len(frames)
-        for a, b in zip(frames, frames[1:]):
-            if b - a < 2 or b - a > max_gap:
-                continue
-            pa, pb = np.asarray(kept[a]["field_point_ft"]), np.asarray(kept[b]["field_point_ft"])
-            for f in range(a + 1, b):
-                if has_fit[f]:
-                    t = (f - a) / (b - a)
-                    cleaned[f].append({"object_id": oid, "team": team, "image_point": None,
-                                       "field_point_ft": ((1 - t) * pa + t * pb).tolist(), "interpolated": True})
-                    interpolated += 1
-    for players in cleaned:
-        players.sort(key=lambda p: p["object_id"])
-    stats = {"bad_frames": sorted(bad), "dropped_points": sum(len(s) for s in tracks.values()) - kept_count, "interpolated_points": interpolated}
-    return cleaned, stats
+def floor_points(path: Path, idx: int, record: dict, mask_dir: Path, H: np.ndarray, dims: fm.FieldDims) -> list[fpt.FootPoint]:
+    h = cv2.imread(str(path)).shape[0]
+    masks = load_masks(mask_dir, idx)
+    hidden = fpt.partly_hidden(masks)
+    teams = record.get("teams") or ["unknown"] * len(record["object_ids"])
+    x_lo, x_hi = 100.0 - dims.half_length, 100.0 + dims.half_length
+    points = []
+    for oid, box, team in zip(record["object_ids"], record["boxes"], teams):
+        mask = masks.get(int(oid))
+        if team == "ignore" or float(box[3]) >= h - 2 or (mask is not None and mask.sum() < fpt.MIN_MASK_PX):
+            continue  # not on the floor, feet cut off by the bottom of the image, or a SAM3 remnant
+        image_xy = foot_point(mask, box)
+        x, y = apply_h(H, image_xy)
+        if not (x_lo - 3 <= x <= x_hi + 3 and -3 <= y <= dims.width + 3):
+            continue  # bench, stands, or a player hidden behind the near boards
+        points.append(fpt.FootPoint(idx, int(oid), team, image_xy, np.array([x, y]), h_jacobian(H, image_xy), int(oid) in hidden))
+    return points
 
 
 def main() -> None:
     args = parse_args()
     hom = json.loads(Path(args.homographies).read_text())
     dims = fm.FieldDims(**hom["field_dims"])
-    by_name = {h["frame_name"]: (np.asarray(h["matrix_image_to_world"], float), h.get("status", "")) for h in hom["homographies"]}
+    by_name = {h["frame_name"]: (np.asarray(h["matrix_image_to_world"], float), h["status"]) for h in hom["homographies"] if h["status"] in BROADCAST_STATUS}
     sam3 = json.loads(Path(args.sam3_json).read_text())
     records = {int(r.get("frame", i)): r for i, r in enumerate(sam3["frames"])}
     frame_paths = sorted(Path(args.frames_dir).glob("frame_*.jpg"))
     mask_dir = Path(args.instance_mask_dir)
     names = dict(item.split("=", 1) for item in args.team_names.split(",") if "=" in item)
-    x_lo, x_hi = 100.0 - dims.half_length, 100.0 + dims.half_length
+    settings = fpt.TrackerSettings(
+        fps=args.fps, max_gap=int(round(args.max_gap_seconds * args.fps)), max_speed=args.max_speed_ft_per_s,
+        noise_ft=args.position_noise_ft, confirm=max(2, int(round(0.3 * args.fps))),
+    )
 
     field_h = args.height - HEADER_PX - FOOTER_PX
     base, to_px = field_canvas(dims, args.width, field_h, margin=36)
@@ -183,38 +175,39 @@ def main() -> None:
     footer = legend(args.width, names)
     trail_frames = int(round(args.trail_seconds * args.fps))
 
-    sizes, fits, raw = [], [], []
-    for idx, path in enumerate(frame_paths):
-        h, w = cv2.imread(str(path)).shape[:2]
-        record = records.get(idx, {"object_ids": [], "boxes": []})
-        players = []
-        fit = by_name.get(path.name)
-        if fit is not None:
-            H = fit[0]
-            masks = load_masks(mask_dir, idx)
-            teams = record.get("teams") or ["unknown"] * len(record["object_ids"])
-            for oid, box, team in zip(record["object_ids"], record["boxes"], teams):
-                if team == "ignore" or float(box[3]) >= h - 2:
-                    continue  # not on the floor, or feet cut off by the bottom of the image
-                image_xy = foot_point(masks.get(int(oid)), box)
-                x, y = apply_h(H, image_xy)
-                if not (x_lo - 3 <= x <= x_hi + 3 and -3 <= y <= dims.width + 3):
-                    continue  # bench, stands, or a player hidden behind the near boards
-                players.append({"object_id": int(oid), "team": team, "image_point": list(image_xy), "field_point_ft": [float(x), float(y)]})
-        sizes.append((h, w))
-        fits.append(fit)
-        raw.append(players)
-    cleaned, stats = clean_tracks(raw, [f is not None for f in fits], int(round(args.outlier_window_seconds * args.fps)),
-                                  args.outlier_ft, int(round(args.max_gap_seconds * args.fps)))
+    fits = [by_name.get(path.name) for path in frame_paths]
+    points = []
+    for idx, (path, fit) in enumerate(zip(frame_paths, fits)):
+        if fit is not None and idx in records:
+            points += floor_points(path, idx, records[idx], mask_dir, fit[0], dims)
+    tracks, stats = fpt.track_players(points, settings)
+    players_by_frame: list[list[dict]] = [[] for _ in frame_paths]
+    for track_id, track in enumerate(tracks, 1):
+        for f, (state, _) in track["states"].items():
+            p = track["measured"].get(f)
+            players_by_frame[f].append({
+                "track": track_id, "team": track["team"], "object_id": p.object_id if p else None,
+                "image_point": list(p.image_point) if p else None,
+                "measured_field_point_ft": p.field_point.tolist() if p else None,
+                "field_point_ft": state[:2].tolist(), "interpolated": p is None, "number": None,
+            })
     bad_frames = set(stats["bad_frames"])
+    jersey = None
+    if args.jersey_reads:
+        jersey = jersey_numbers(json.loads(Path(args.jersey_reads).read_text()),
+                                [{"frame": f, "frame_name": path.name, "players": players_by_frame[f]} for f, path in enumerate(frame_paths)])
+        for players in players_by_frame:
+            for item in players:
+                item["number"] = jersey["track_numbers"].get(item["track"])
 
+    h, w = cv2.imread(str(frame_paths[0])).shape[:2]
     history: dict[int, list[tuple[int, float, float, str]]] = {}
     video, positions = [], []
     for idx, path in enumerate(frame_paths):
-        (h, w), fit, players = sizes[idx], fits[idx], cleaned[idx]
+        fit, players = fits[idx], players_by_frame[idx]
         canvas = base.copy()
         if fit is not None:
-            H, status = fit
+            H = fit[0]
             G = np.linalg.inv(H)
             # sign of the projective scale for floor points in front of the camera
             front = np.sign((G @ np.append(apply_h(H, (0.5 * w, 0.9 * h)), 1.0))[2])
@@ -223,23 +216,25 @@ def main() -> None:
                 u, v = uvw[0] / uvw[2], uvw[1] / uvw[2]
             seen = (uvw[2] * front > 0) & (u >= 0) & (u < w) & (v >= 0) & (v < h)
             canvas[rows[seen], cols[seen]] = (0.7 * canvas[rows[seen], cols[seen]] + 0.3 * 255).astype(np.uint8)
-            for item in players:
-                history.setdefault(item["object_id"], []).append((idx, *item["field_point_ft"], item["team"]))
-            filled = sum(item["interpolated"] for item in players)
-            header = f"{path.name}   t = {idx / args.fps:.1f} s   {STATUS_TEXT.get(status, status)}   {len(players)} players"
+        for item in players:
+            history.setdefault(item["track"], []).append((idx, *item["field_point_ft"], item["team"]))
+        filled = sum(item["interpolated"] for item in players)
+        if fit is not None or players:
+            source = STATUS_TEXT.get(fit[1], fit[1]) if fit is not None else "camera lost briefly"
+            header = f"{path.name}   t = {idx / args.fps:.1f} s   {source}   {len(players)} players"
             if filled:
                 header += f" ({filled} interpolated)"
         else:
-            header = f"{path.name}   t = {idx / args.fps:.1f} s   no field fit for this frame"
+            header = f"{path.name}   t = {idx / args.fps:.1f} s   close-up or camera cut: no field positions"
 
-        for oid, samples in history.items():
+        for samples in history.values():
             recent = [(x, y) for f, x, y, _ in samples if idx - trail_frames <= f <= idx]
             if trail_frames and len(recent) >= 2 and samples[-1][0] == idx:
                 fill = TEAM_STYLE_BGR.get(samples[-1][3], TEAM_STYLE_BGR["unknown"])[0]
                 cv2.polylines(canvas, [np.round(to_px(np.asarray(recent))).astype(np.int32)], False, fill, 2, cv2.LINE_AA)
         for item in players:
             p = tuple(int(v) for v in np.round(to_px(np.asarray([item["field_point_ft"]]))[0]))
-            draw_player(canvas, p, item["team"], str(item["object_id"]))
+            draw_player(canvas, p, item["team"], item["number"] or "")
 
         top = np.full((HEADER_PX, args.width, 3), 18, np.uint8)
         cv2.putText(top, header, (16, 29), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (235, 235, 235), 1, cv2.LINE_AA)
@@ -254,16 +249,23 @@ def main() -> None:
     ) as writer:
         for frame in video:
             writer.append_data(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    tracking = {
+        "max_gap_seconds": args.max_gap_seconds, "max_speed_ft_per_s": args.max_speed_ft_per_s, "position_noise_ft": args.position_noise_ft,
+        "foot_noise_px": settings.foot_px, "partly_hidden_noise_px": settings.hidden_px, "acceleration_ft2_per_s3": settings.acceleration,
+        "gate": settings.gate, "confirm_frames": settings.confirm,
+        "floor_points": len(points), "floor_points_partly_hidden": sum(p.hidden for p in points),
+        "interpolated_points": sum(item["interpolated"] for players in players_by_frame for item in players), **stats,
+    }
     if args.output_json:
         Path(args.output_json).write_text(json.dumps({
             "schema": "field_birds_eye_players_v1", "homographies": args.homographies, "sam3_json": args.sam3_json,
-            "field_dims": dims.to_dict(), "fps": args.fps,
-            "cleaning": {"outlier_ft": args.outlier_ft, "outlier_window_seconds": args.outlier_window_seconds,
-                         "max_gap_seconds": args.max_gap_seconds, **stats},
-            "frames": positions,
+            "field_dims": dims.to_dict(), "fps": args.fps, "tracking": tracking,
+            "jersey_numbers": {"reads": args.jersey_reads, **jersey["summary"], "players": jersey["players"]} if jersey else None, "frames": positions,
         }) + "\n")
     print(json.dumps({"video": str(out), "frames": len(video), "frames_with_fit": sum(p["has_field_fit"] for p in positions),
-                      "player_points": sum(len(p["players"]) for p in positions), **stats}))
+                      "player_points": sum(len(p["players"]) for p in positions), **{k: v for k, v in tracking.items() if k != "bad_frames"},
+                      "bad_frames": len(bad_frames), **({"tracks_numbered": jersey["summary"]["tracks_numbered"], "players": jersey["summary"]["players"],
+                      "share_of_team_player_points_numbered": jersey["summary"]["share_of_team_player_points_numbered"]} if jersey else {})}))
 
 
 if __name__ == "__main__":

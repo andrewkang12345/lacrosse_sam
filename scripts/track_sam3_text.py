@@ -1,3 +1,10 @@
+"""SAM3 text-prompt video tracking of one run of frames (run_sam3_text_chunked.py splits a clip).
+
+Writes an overlay video (--output), the detections JSON next to it, and optionally label
+masks (--mask-dir) and per-frame instance masks (--instance-mask-dir, NNNNNNNN.npz).
+Needs HF_TOKEN for the gated facebook/sam3 checkpoint.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -13,11 +20,11 @@ from video_utils import load_pil_frames, overlay_masks, write_h264_video
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--frames-dir", default="data/frames_10fps")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--frames-dir", required=True)
     parser.add_argument("--text", default="lacrosse player")
     parser.add_argument("--model", default="facebook/sam3")
-    parser.add_argument("--output", default="outputs/sam3_text_tracks.mp4")
+    parser.add_argument("--output", required=True, help="Overlay video; the detections JSON is written next to it.")
     parser.add_argument("--mask-dir", default=None)
     parser.add_argument("--instance-mask-dir", default=None)
     parser.add_argument("--fps", type=float, default=10.0)

@@ -610,37 +610,69 @@ class MotionPair:
     inlier_ratio: float
 
 
+def _tracked_inliers(prev: np.ndarray, gray: np.ndarray, p0: np.ndarray, guess: np.ndarray | None) -> tuple[np.ndarray, np.ndarray, float, np.ndarray] | None:
+    """Forward-backward KLT tracks that agree on one homography, or None if too few do."""
+    flags = cv2.OPTFLOW_USE_INITIAL_FLOW if guess is not None else 0
+    start = cv2.perspectiveTransform(p0, guess) if guess is not None else None
+    p1, st1, _ = cv2.calcOpticalFlowPyrLK(prev, gray, p0, start, winSize=(31, 31), maxLevel=5, flags=flags)
+    back, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev, p1, p0.copy() if guess is not None else None, winSize=(31, 31), maxLevel=5, flags=flags)
+    ok = (st1[:, 0] == 1) & (st2[:, 0] == 1) & (np.linalg.norm(back - p0, axis=2)[:, 0] < 1.0)
+    if ok.sum() < 50:
+        return None
+    a, b = p0[ok, 0], p1[ok, 0]
+    H, inl = cv2.findHomography(a, b, cv2.RANSAC, 1.5)
+    if H is None or inl is None:
+        return None
+    inl = inl[:, 0].astype(bool)
+    ratio = float(inl.mean())
+    spread = np.ptp(a[inl], axis=0).prod() / (gray.shape[0] * gray.shape[1]) if inl.any() else 0.0
+    if inl.sum() < 30 or ratio < 0.5 or spread < 0.1:
+        return None
+    return a[inl], b[inl], ratio, H
+
+
 def frame_motion_pairs(frames_dir: Path, frame_names: list[str], max_points: int) -> list[MotionPair]:
     """Background points tracked between neighbouring frames.
 
     The broadcast camera pans, tilts and zooms about a fixed centre, so every static
     point (floor, boards, stands) moves by one homography between frames, whatever its
     depth. Points are KLT-tracked forward and back, and the RANSAC homography inliers
-    are kept; moving players and static screen graphics fall out as outliers. Pairs with
-    few inliers (cuts, heavy blur) are skipped."""
+    are kept; moving players and static screen graphics fall out as outliers. A pair
+    that fails is tracked again from the previous pair's motion, which recovers fast
+    pans. Pairs with few inliers (cuts, heavy blur), or whose inliers sit in one small
+    patch of the image (a score graphic over a cut), are skipped."""
     rng = np.random.default_rng(11)
     pairs = []
-    prev = None
+    prev, last_motion = None, None
     for i, name in enumerate(frame_names):
         gray = cv2.cvtColor(cv2.imread(str(frames_dir / name), cv2.IMREAD_COLOR), cv2.COLOR_BGR2GRAY)
         if prev is not None:
             p0 = cv2.goodFeaturesToTrack(prev, 1500, 0.01, 10, mask=(prev > 8).astype(np.uint8))
+            found = None
             if p0 is not None and len(p0) >= 50:
-                p1, st1, _ = cv2.calcOpticalFlowPyrLK(prev, gray, p0, None, winSize=(31, 31), maxLevel=5)
-                back, st2, _ = cv2.calcOpticalFlowPyrLK(gray, prev, p1, None, winSize=(31, 31), maxLevel=5)
-                ok = (st1[:, 0] == 1) & (st2[:, 0] == 1) & (np.linalg.norm(back - p0, axis=2)[:, 0] < 1.0)
-                if ok.sum() >= 50:
-                    a, b = p0[ok, 0], p1[ok, 0]
-                    _, inl = cv2.findHomography(a, b, cv2.RANSAC, 1.5)
-                    inl = inl[:, 0].astype(bool) if inl is not None else np.zeros(len(a), bool)
-                    ratio = float(inl.mean())
-                    if inl.sum() >= 30 and ratio >= 0.5:
-                        keep = np.flatnonzero(inl)
-                        if len(keep) > max_points:
-                            keep = rng.choice(keep, max_points, replace=False)
-                        pairs.append(MotionPair(i - 1, i, a[keep].astype(float), b[keep].astype(float), ratio))
+                found = _tracked_inliers(prev, gray, p0, None)
+                if found is None and last_motion is not None:
+                    found = _tracked_inliers(prev, gray, p0, last_motion)
+            last_motion = found[3] if found is not None else None
+            if found is not None:
+                a, b, ratio, _ = found
+                keep = np.arange(len(a))
+                if len(keep) > max_points:
+                    keep = rng.choice(keep, max_points, replace=False)
+                pairs.append(MotionPair(i - 1, i, a[keep].astype(float), b[keep].astype(float), ratio))
         prev = gray
     return pairs
+
+
+def motion_residuals(r: np.ndarray, landmark_scale: float, motion_scale: float) -> np.ndarray:
+    """Rescale motion residuals so the fit's soft-L1 loss treats them at `motion_scale`.
+
+    Tracked points are already RANSAC inliers, so when the motion check flags a pair, the
+    large residual means the cameras jumped, not that the measurement is an outlier. In
+    the extra refinement they keep a quadratic cost up to the larger scale, while
+    landmarks stay robust at the smaller one."""
+    a = 1.0 + (motion_scale / landmark_scale) ** 2 * (np.sqrt(1.0 + (r / motion_scale) ** 2) - 1.0)
+    return np.sign(r) * landmark_scale * np.sqrt(np.maximum(a * a - 1.0, 0.0))
 
 
 def motion_transfer(cams: Cameras, a: int, b: int, pa: np.ndarray) -> np.ndarray:
@@ -717,9 +749,10 @@ class Stage2Problem:
     """
 
     def __init__(self, rigid: Cameras, per_frame: dict[int, list[FrameObs]], dist: FieldModel, args: argparse.Namespace, dim_names: tuple[str, ...],
-                 motion: list[MotionPair]):
+                 motion: list[MotionPair], motion_scale: float | None = None):
         self.rigid, self.per_frame, self.dist, self.args = rigid, per_frame, dist, args
         self.motion = motion
+        self.motion_scale = motion_scale
         self.dim_names = dim_names
         self.m = len(dim_names)
         self.dims0 = dist.dims.vector(dim_names)
@@ -784,7 +817,8 @@ class Stage2Problem:
         if self.m:
             out[self.dims_start : self.dims_start + self.m] = (x[3 : self.off] - self.dims0) / self.args.dims_prior_sigma_ft * self.args.robust_scale_px
         for pair, (start, stop) in zip(self.motion, self.motion_rows):
-            out[start:stop] = (np.clip(motion_transfer(cams, pair.a, pair.b, pair.pa) - pair.pb, -400.0, 400.0) * self.args.motion_weight).ravel()
+            r = np.clip(motion_transfer(cams, pair.a, pair.b, pair.pa) - pair.pb, -400.0, 400.0) * self.args.motion_weight
+            out[start:stop] = (r if self.motion_scale is None else motion_residuals(r, self.args.robust_scale_px, self.motion_scale)).ravel()
         return out
 
     def sparsity(self) -> lil_matrix:
@@ -840,11 +874,18 @@ def stage2_refine(
     dim_names: tuple[str, ...],
     motion: list[MotionPair],
     warm_start: np.ndarray | None = None,
+    start_centre: np.ndarray | None = None,
+    motion_scale: float | None = None,
 ) -> tuple[Cameras, FieldDims, dict, np.ndarray]:
-    problem = Stage2Problem(rigid, per_frame, dist, args, dim_names, motion)
+    problem = Stage2Problem(rigid, per_frame, dist, args, dim_names, motion, motion_scale)
     S = problem.S
     scan, centre0, look_at = _initial_centres(problem, rigid, args)
-    starts = [warm_start] if warm_start is not None else [x for _, x in scan[:2]]
+    if warm_start is not None:
+        starts = [warm_start]
+    elif start_centre is not None:
+        starts = [problem.initial(start_centre)]
+    else:
+        starts = [x for _, x in scan[:2]]
     # per-frame corrections are bounded: at most 20 deg of rotation and 2x zoom
     d_lo, d_hi = dims_bounds(dim_names, dist.dims)
     lower = np.concatenate([np.full(3, -np.inf), d_lo, np.tile([-0.35, -0.35, -0.35, -0.7], S)])
@@ -1054,12 +1095,13 @@ def render_reprojection_video(
     dims_after: FieldDims,
     path: Path,
     fps: float,
+    closeups: set[int],
 ) -> None:
     frames = []
     for i, name in enumerate(frame_names):
         img = cv2.imread(str(frames_dir / name), cv2.IMREAD_COLOR)
-        left = draw_field_on_frame(img, before[i], dims_before)
-        right = draw_field_on_frame(img, after[i], dims_after)
+        left = img.copy() if i in closeups else draw_field_on_frame(img, before[i], dims_before)
+        right = img.copy() if i in closeups else draw_field_on_frame(img, after[i], dims_after)
         for panel, label, errs in ((left, "planar fit (rigid)", errors_before), (right, "planar fit + camera refinement", errors_after)):
             err = errs["by_frame"].get(i)
             text = f"{label}   frame {i}" + (f"   median {err:.1f}px" if err is not None else "")
@@ -1126,12 +1168,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--search-candidates", type=int, default=12)
     parser.add_argument("--robust-scale-ft", type=float, default=1.5)
     parser.add_argument("--no-camera-refinement", action="store_true")
+    parser.add_argument("--seed-cameras", default=None, help="JSON from propagate_field_cameras.py: per-frame cameras that start the refinement in place of the VGGT-Omega cameras.")
     parser.add_argument("--robust-scale-px", type=float, default=3.0)
     parser.add_argument("--points-per-observation", type=float, default=40.0)
     parser.add_argument("--prior-weight", type=float, default=0.03)
     parser.add_argument("--smooth-weight", type=float, default=0.3)
     parser.add_argument("--motion-weight", type=float, default=1.0,
                         help="Weight of tracked background points between neighbouring frames in the camera refinement.")
+    parser.add_argument("--motion-scale-px", type=float, default=30.0, help="Robust-loss scale of the tracked motion in the extra refinement run when the motion check flags a camera jump.")
     parser.add_argument("--motion-points", type=int, default=40, help="Tracked background points used per neighbouring-frame pair.")
     parser.add_argument("--motion-max-interval-seconds", type=float, default=0.25,
                         help="Track background points (refinement term and motion check) only when frames are at most this far apart (1 / --fps).")
@@ -1147,9 +1191,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dims-prior-sigma-ft", type=float, default=5.0, help="Soft prior pulling estimated dimensions towards the NLL defaults.")
     parser.add_argument("--centre-circle-radius-ft", type=float, default=0.0, help="Painted centre faceoff circle radius (0 = none; neither arena here has one).")
     args = parser.parse_args()
+    args.closeup_frames = set()
     if args.paint_masks:
         root = Path(args.paint_masks)
-        ids = json.loads((root / "labels.json").read_text())["object_ids"]
+        labels = json.loads((root / "labels.json").read_text())
+        ids = labels["object_ids"]
+        args.closeup_frames = set(labels.get("closeup_frames", []))
         args.landmark += [f"{name}={root / 'masks'}#{oid}" for name, oid in ids.items()]
     if not args.landmark:
         parser.error("give --landmark and/or --paint-masks")
@@ -1208,22 +1255,39 @@ def main() -> None:
 
     # Tracking is only reliable between frames close in time (10 fps clips, not 1 fps samples).
     tracked_motion = frame_motion_pairs(Path(args.frames_dir), frame_names, args.motion_points) if 1.0 / args.fps <= args.motion_max_interval_seconds else []
+    closeups = {i for i, name in enumerate(frame_names) if name in args.closeup_frames}
+    tracked_motion = [p for p in tracked_motion if p.a not in closeups and p.b not in closeups]
     dims = default_dims
     if args.no_camera_refinement:
         final_cams, stage2 = rigid_cams, {"skipped": True}
     else:
         dim_names = dims_to_estimate(args.estimate_dims, {o.name for o in observations})
         per_frame = build_frame_observations(observations, args.max_points_per_mask, args.points_per_observation)
-        final_cams, dims, stage2, x = stage2_refine(rigid_cams, per_frame, dist, args, dim_names, tracked_motion)
+        refine_from, start_centre = rigid_cams, None
+        if args.seed_cameras:
+            seed = json.loads(Path(args.seed_cameras).read_text())
+            if seed["frame_names"] != frame_names:
+                raise ValueError(f"{args.seed_cameras} does not cover the frames of {args.predictions}")
+            seeded = seed["cameras_field_ft"]["refined"]
+            refine_from = Cameras(K=np.asarray(seeded["K"]), R=np.asarray(seeded["R"]), C=np.asarray(seeded["C"]))
+            start_centre = np.median(refine_from.C, axis=0)
+        shared_frames, shared_motion = per_frame, tracked_motion
+        final_cams, dims, stage2, x = stage2_refine(refine_from, shared_frames, dist, args, dim_names, shared_motion, start_centre=start_centre)
         off = off_camera_frames(final_cams, observations, shape, args.outlier_frame_px, dims)
         if off:  # refit the shared camera without the frames it cannot explain
             shared_frames = {i: v for i, v in per_frame.items() if i not in off}
             shared_motion = [p for p in tracked_motion if p.a not in off and p.b not in off]
-            final_cams, dims, stage2, x = stage2_refine(rigid_cams, shared_frames, dist, args, dim_names, shared_motion, warm_start=x)
+            final_cams, dims, stage2, x = stage2_refine(refine_from, shared_frames, dist, args, dim_names, shared_motion, warm_start=x)
             off = off_camera_frames(final_cams, observations, shape, args.outlier_frame_px, dims)
+        jumps = len(camera_motion_check(final_cams, shared_motion, args.motion_check_px, frame_names).get("frames_over_threshold", {}))
+        if jumps:  # a camera still jumps against the measured motion: refine again with that motion trusted further
+            final_cams, dims, stage2, x = stage2_refine(refine_from, shared_frames, dist, args, dim_names, shared_motion, warm_start=x, motion_scale=args.motion_scale_px)
+            off = off_camera_frames(final_cams, observations, shape, args.outlier_frame_px, dims)
+        stage2["frames_over_motion_check_before_final_pass"] = jumps
         final_cams, own_status = fit_own_cameras(final_cams, rigid_cams, off, observations, per_frame, dims, shape, args)
         frame_status = {i: ("shared_camera" if per_frame.get(i) else "no_landmarks") for i in range(len(frame_names))}
         frame_status.update(own_status)
+        frame_status.update({i: "closeup" for i in closeups})
         stage2["frame_status_counts"] = {k: list(frame_status.values()).count(k) for k in sorted(set(frame_status.values()))}
         stage2["frame_status"] = {frame_names[i]: v for i, v in frame_status.items()}
     final_H = [field_to_image_homography(final_cams, i) for i in range(len(frame_names))]
@@ -1233,14 +1297,14 @@ def main() -> None:
     positions = {"rigid": landmark_positions(rigid_cams, observations, default_dims), "refined": landmark_positions(final_cams, observations, dims)}
     frames_dir = Path(args.frames_dir)
     render_landmarks_on_field(lifted, params, out_dir / "landmarks_on_field.jpg", default_dims)
-    render_reprojection_video(frames_dir, frame_names, rigid_H, final_H, rigid_errors, final_errors, default_dims, dims, out_dir / "field_reprojection_h264.mp4", args.fps)
+    render_reprojection_video(frames_dir, frame_names, rigid_H, final_H, rigid_errors, final_errors, default_dims, dims, out_dir / "field_reprojection_h264.mp4", args.fps, closeups)
 
     all_frames = sorted(p.name for p in frames_dir.glob("frame_*.jpg"))
     # Unreliable frames are left out so consumers fall back to the nearest good frame.
     homographies = []
     for i, name in enumerate(frame_names):
         status = stage2.get("frame_status", {}).get(name, "rigid")
-        if status == "unreliable":
+        if status in ("unreliable", "closeup"):
             continue
         H_img_to_field = np.linalg.inv(final_H[i])
         homographies.append(

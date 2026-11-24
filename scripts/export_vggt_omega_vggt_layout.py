@@ -1,19 +1,19 @@
 """Export VGGT-Omega predictions and the planar field fit in the 518x518 VGGT layout.
 
-The depth-based consumers in this repo (render_sam_body4d_vggt_birds_eye.py,
-view_vggt_reconstruction.py, run_cotracker_vggt_player_trajectories.py) read:
+The SAM-Body4D mesh scripts (render_sam_body4d_on_field.py, view_vggt_reconstruction.py)
+read, from --output-dir:
 
   vggt_predictions_compact.npz  frame_indices, extrinsic, intrinsic, depth_map,
                                 depth_conf on a 518x518 square, letterboxed image
-  a fit JSON                    floor_plane {center, basis_u, basis_v},
-                                plane_to_floor_homography, vggt_resolution
+  field_fit_vggt_layout.json    floor_plane {center, basis_u, basis_v},
+                                plane_to_floor_homography, vggt_resolution, and the
+                                path of the field_plane_fit.json it came from
 
-This script resamples VGGT-Omega depth/confidence into that square layout
-(z-depth is unchanged by resampling, intrinsics are rescaled) and writes the
-rigid plane->field similarity from fit_field_plane_landmarks.py as the
-plane_to_floor_homography. Depth-based consumers therefore use the rigid
-planar fit; the per-frame camera refinement is only available through
-field_homographies.json.
+This script resamples VGGT-Omega depth/confidence into that square layout (z-depth is
+unchanged by resampling, intrinsics are rescaled) and writes the rigid plane->field
+similarity from fit_field_plane_landmarks.py as the plane_to_floor_homography. The
+meshes are therefore placed with the rigid planar fit, not the per-frame refined
+cameras of field_homographies.json.
 """
 
 from __future__ import annotations

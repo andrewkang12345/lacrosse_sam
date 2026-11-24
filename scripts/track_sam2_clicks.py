@@ -1,3 +1,9 @@
+"""SAM2 video tracking of point prompts (the faceoff dots of click_faceoff_dots.py).
+
+Writes an overlay video, label masks and per-frame instance masks (NNNNNNNN.npz) with
+one object per prompted ID.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -13,11 +19,11 @@ from video_utils import load_pil_frames, overlay_masks, write_h264_video
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--frames-dir", default="data/frames_10fps")
-    parser.add_argument("--prompts", required=True)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--frames-dir", required=True)
+    parser.add_argument("--prompts", required=True, help="JSON with a `prompts` list, from click_faceoff_dots.py.")
     parser.add_argument("--model", default="facebook/sam2.1-hiera-large")
-    parser.add_argument("--output", default="outputs/sam2_click_tracks.mp4")
+    parser.add_argument("--output", required=True)
     parser.add_argument("--mask-dir", default=None)
     parser.add_argument("--instance-mask-dir", default=None)
     parser.add_argument("--fps", type=float, default=10.0)

@@ -375,10 +375,16 @@ def render_timeline(pred: dict, fit: dict, frames_dir: Path, out: Path, args: ar
     top = View(top_eye, look_at(top_eye, FIELD_CENTER, np.asarray([0.0, 1.0, 0.0])), top_focal, args.width, half_h)
     frames = []
     for i, name in enumerate(names):
-        p, c = frame_points(pred, i, k, Q, center, shift, args.conf_percentile, 1, refined_or_none(fit, args))
         frame = cv2.imread(str(frames_dir / name), cv2.IMREAD_COLOR)
-        cam_panel = cv2.resize(draw_field_on_frame(frame, field_to_image_homography(refined, i), dims), (half_w, half_h))
         frame_status = fit.get("stage2_camera_refinement", {}).get("frame_status", {}).get(name, "")
+        if frame_status == "closeup":  # another camera: the field is not placed
+            panel = cv2.resize(frame, (half_w, half_h))
+            label(panel, f"input frame {i}: close-up, not placed on the field")
+            empty = np.full((half_h, half_w, 3), 18, np.uint8)
+            frames.append(cv2.cvtColor(np.vstack([np.hstack([panel, empty]), np.full((half_h, args.width, 3), 18, np.uint8)]), cv2.COLOR_BGR2RGB))
+            continue
+        p, c = frame_points(pred, i, k, Q, center, shift, args.conf_percentile, 1, refined_or_none(fit, args))
+        cam_panel = cv2.resize(draw_field_on_frame(frame, field_to_image_homography(refined, i), dims), (half_w, half_h))
         label(cam_panel, f"input frame {i} + fitted field" + (f"  [{frame_status}]" if frame_status and frame_status != "shared_camera" else ""))
         # oblique view from the opposite side of the broadcast camera, following the play
         side = np.sign(np.median(refined.C[:, 1]) - FIELD_CENTER[1]) or -1.0

@@ -24,23 +24,21 @@ from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 
-from nll_field_geometry import CORNER_RADIUS_FT, CREASE_CHORD_DEPTH_FROM_GOAL_LINE_FT, CREASE_RADIUS_FT, FLOOR_WIDTH_FT
-
 CENTRE_X_FT = 100.0
 
 
 @dataclass(frozen=True)
 class FieldDims:
     half_length: float = 100.0  # end boards at x = 100 -/+ half_length
-    corner_radius: float = CORNER_RADIUS_FT
+    corner_radius: float = 22.0 + 8.0 / 12.0  # standard rink corner, refitted per arena
     restraining_offset: float = 42.5  # restraining lines at x = 100 -/+ offset
     goal_from_end: float = 12.0  # goal lines 12' in from the end boards
-    crease_radius: float = CREASE_RADIUS_FT  # crease circle centred on the goal-line midpoint
-    crease_back: float = CREASE_CHORD_DEPTH_FROM_GOAL_LINE_FT  # straight back of the crease, behind the goal line
+    crease_radius: float = 9.0 + 3.0 / 12.0  # crease circle centred on the goal-line midpoint
+    crease_back: float = 4.5 + 1.0  # straight back of the crease, 1' behind the 4'6" goal base
     dot_offset_x: float = 57.5  # faceoff dots at x = 100 -/+ offset ...
     dot_offset_y: float = 27.5  # ... and y = 42.5 -/+ offset
     centre_circle_radius: float = 0.0  # 0 = not painted
-    width: float = FLOOR_WIDTH_FT  # scale reference, never estimated
+    width: float = 85.0  # scale reference, never estimated
 
     # Estimated by default: the corner radius of the boards (the rinks these floors sit on
     # differ). The rest is fixed by the rulebook; the floor length (standard 200 ft rink) is

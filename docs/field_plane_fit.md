@@ -1,14 +1,9 @@
 # Fitting the NLL field to VGGT-Omega through its floor plane
 
 `scripts/fit_field_plane_landmarks.py` fits the NLL field to a VGGT-Omega reconstruction. It
-replaces the depth-based VGGT field-fitting scripts (`fit_vggt_field_from_sam3_text_masks.py`,
-`refit_vggt_field_with_sam2_faceoff_masks.py`, `fit_constrained_field_to_vggt_plane.py`,
-`refit_vggt_field_with_goalie_anchor.py`, `refit_vggt_field_with_player_anchors.py`,
-`refine_vggt_field_fit_from_point_clicks.py`, and the homography fit inside `run_vggt_birds_eye.py`).
-
-The fit treats the VGGT-Omega reconstruction as what it is for a lacrosse floor: one plane
-seen by one broadcast camera. Landmarks are fitted in that plane, and the camera is then
-corrected against the known field. It needs three things to be right:
+treats the reconstruction as what it is for a lacrosse floor: one plane seen by one broadcast
+camera. Landmarks are fitted in that plane, and the camera is then corrected against the known
+field. It needs three things to be right:
 
 - **Landmarks that are what they claim to be.** These are painted lines and board edges, detected
   in every frame, labeled, and checked by eye (`scripts/build_field_paint_masks.py`).
@@ -20,81 +15,50 @@ corrected against the known field. It needs three things to be right:
 The 3D renders place VGGT-Omega's points through the same refined cameras, so the floor paint in
 the top-down view lands on the fitted lines.
 
-| clip | fit | median reprojection error | 90th percentile |
+| clip | frames | median reprojection error | 90th percentile |
 |---|---|---|---|
-| 10 s, 10 fps | depth-based fit (goalie-anchor similarity) | 35.6 px | 160 px |
-| | **plane fit** | **2.9 px** | **8.4 px** |
-| Week 1, 1 fps | depth-based fit (huddle/goalie anchors, used by the SAM-Body4D fusion)\* | 9.4 px | 55 px |
-| | **plane fit** | **1.8 px** | **5.4 px** |
+| 10 s, San Diego | 100 at 10 fps | 2.9 px | 8.4 px |
+| Week 1, Oshawa: keyframes | 153 at 1 fps | 1.8 px | 5.4 px |
+| Week 1, Oshawa | 1,530 at 10 fps | 1.7 px | 5.2 px |
 
 Error is the image-space distance from every landmark pixel to the projected model curve of
 *its own* landmark: midfield line, each restraining line, each crease, the far board base, and
-for the 10 s clip the two SAM2 faceoff dots. Both fits are scored on the same checked masks, in
-all frames.
-\*The depth-based Week 1 fit has the two ends of the floor swapped. It is scored here with the
-ends swapped back, in its favour; as fitted it is thousands of pixels off.
+for the 10 s clip the two SAM2-tracked faceoff dots.
 
 ![10 s clip: the fitted field drawn on four frames](figures/clip10s_field_overlay.jpg)
 ![Week 1: the fitted field drawn on four frames](figures/week1_field_overlay.jpg)
 
-## Why depth-based fitting fails on broadcast footage
+## Why one plane and one camera
 
-**1. Every frame's camera and depth are taken as exact.** Each mask pixel takes VGGT's depth at
-that pixel, is unprojected to 3D, and is then dropped orthogonally onto one fitted plane.
-Broadcast reconstructions are not consistent from frame to frame. In VGGT-Omega's reconstruction
-of the 10 s clip, every frame's floor is very planar on its own (0.4% rms off-plane), but the floor
-offset and the camera height drift by 14–24% across frames. Collected into one plane, the right
-restraining line from different frames lands up to 11 ft apart: a band, not a line, with no
-well-defined position to fit.
+**VGGT-Omega's frames disagree with each other.** Every frame's floor is very planar on its own
+(0.4% rms off-plane in the 10 s clip), but the floor offset and the camera height drift by 14–24%
+across frames. Unprojecting each frame's landmark pixels with its own depth and camera puts the
+right restraining line from different frames up to 11 ft apart: a band, not a line. Casting rays
+through VGGT-Omega's cameras onto one plane gives the same spread, so the cameras themselves have
+to be corrected. That is possible only when a lifted point depends on the camera alone, not on
+depth.
 
-This is a camera problem as much as a depth problem. Casting rays through VGGT's own cameras
-onto the plane gives the same spread. The per-frame cameras have to be corrected (stage 2
-below), and that is only possible when lifting depends on the camera alone, not on depth.
-
-**2. The reconstruction itself is projectively distorted.** For zoomed broadcast footage, VGGT
-confuses zoom with dolly. In the 10 s clip, VGGT-Omega puts the camera about 290 ft from the play
-with a 9° field of view, and slides it about 90 ft along its viewing direction while the operator
-zooms. The refined camera is 180 ft away with a 16° field of view. A camera that is too far and
-too telephoto flattens perspective. The reconstructed floor is then not a scaled copy of the real
-one: it is compressed more on the far side than the near side. Because this distortion and the
-frame-to-frame drift differ per frame, no single similarity, affine or plane homography can match
+**The reconstruction is projectively distorted.** For zoomed broadcast footage, VGGT-Omega confuses
+zoom with dolly. In the 10 s clip it puts the camera about 290 ft from the play with a 9° field of
+view, and slides it about 90 ft along its viewing direction while the operator zooms. The refined
+camera is 180 ft away with a 16° field of view. A camera that is too far and too telephoto flattens
+perspective, so the reconstructed floor is compressed more on the far side than the near side.
+This distortion differs per frame, so no single similarity, affine or plane homography matches
 every landmark in every frame.
 
-**3. Unlabeled nearest-curve matching on a periodic field.** The depth-based Week 1 fit matches
-every white pixel to its nearest model line, using soft-L1 ICP. NLL lines repeat every 42.5 ft
-(restraining, midfield, restraining), so a solution shifted by one spacing scores about as well as
-the correct one. Its white-line model also contains full-width lines at x = 12 and 188 ft that are
-not painted on an NLL floor; they act as extra attractors. Unlabeled lines also cannot tell the two
-ends of the floor apart, and that fit has them swapped.
-
-**4. Initialisation assumes the whole rink is visible.** Starting scales come from the bounding
-box of observed points divided by 200 × 85 ft. A broadcast frame shows roughly half the floor, so
-the starting scale and translation are wrong and the local optimiser stays in that basin.
-
-**5. Mirror-image solutions are allowed.** The similarity search tries both reflections. A camera
-looking down at the floor cannot see a mirrored rink, but unlabeled lines fit a mirror image just as
-well. The similarity fit from `fit_constrained_field_to_vggt_plane.py` is mirrored and reprojects
-318 px off.
-
-**6. Free projective transforms in plane space.** An 8-DOF plane-to-field homography adds two
-perspective degrees of freedom on a metric plane. With landmarks covering only part of the floor it
-extrapolates wildly: the crease ends up about 1000 px off.
-
-**7. Boards treated as floor.** The outline mask covers the vertical boards. Lifting all of its pixels
-puts most of them far off the floor. Only the bottom edge, where the boards meet the turf, lies on
-the field outline.
+**The field repeats.** NLL lines repeat every 42.5 ft (restraining, midfield, restraining), and the
+two ends of the floor look alike. Matching pixels to their nearest model line lets a solution
+shifted by one spacing, or turned end for end, score about as well as the right one. The fit
+therefore uses labeled landmarks, allows only proper similarities (a camera looking down cannot see
+a mirrored floor), and does not free a plane homography, which extrapolates wildly when the
+landmarks cover part of the floor.
 
 ## How the fit works
 
 ### Landmark masks
 
-Text- and click-prompted SAM masks are a poor landmark source. On Week 1, the SAM3 `white lines`
-masks cover a fraction of the visible lines, and the `yellow outline` masks also cover the centre
-logo. Neither says *which* line a pixel belongs to, so a midfield-line pixel can pull towards a
-restraining line and nothing tells the two creases apart. On the 10 s clip, the SAM2 click-tracked
-masks drift, and the outline mask covers the whole boards.
-
-`scripts/build_field_paint_masks.py` detects the landmarks in the frame itself and labels them
+SAM3's text masks cover only part of the visible lines and do not say *which* line a pixel belongs
+to. `scripts/build_field_paint_masks.py` detects the landmarks in the frame itself and labels them
 explicitly:
 
 1. **Floor.** Green turf by colour, plus purple end-zone turf where it touches the green floor
@@ -111,10 +75,11 @@ explicitly:
    fit of the clip (`--fit`). A proposal needs the projected curve to be close and unambiguous.
    For a line it also needs a straight piece running in the projected line's direction. Logo
    artwork next to the midfield line fails that test.
-5. **Review by eye.** Every frame of both clips is checked on the review sheets the script
-   writes (`paint_masks/review/sheet_*.jpg`; the figure below is one of them).
+5. **Review by eye.** Every frame of the 10 s clip and of the Week 1 keyframes is checked on the
+   review sheets the script writes (`paint_masks/review/sheet_*.jpg`; the figure below is one of
+   them).
    - Corrections are kept in `data/field_label_review/*.json`, keyed by frame and candidate id.
-   - Week 1 has 37 corrections in 17 of 153 frames. These are mostly restraining-line pieces
+   - Week 1 has 37 corrections in 17 of 153 keyframes. These are mostly restraining-line pieces
      the proposal misses, and pieces in close-ups that cannot be confirmed and are set to
      unlabeled.
    - The 10 s clip has 36 corrections in 34 of 100 frames. These are mostly the zoomed frames at
@@ -122,6 +87,9 @@ explicitly:
    - Proposed from the final fit, 941 of the 942 labeled pieces keep their label. The final fit
      also proposes 10 Week 1 pieces that the review keeps unlabeled (stick shafts, logo artwork
      and close-ups behind the crease).
+6. **Full frame rate.** At 10 fps, keyframes with at least two painted lines keep their checked
+   masks (`--checked-masks`), and every other frame is labeled from cameras propagated from the
+   keyframes (below).
 
 ![one review sheet: labeled paint, unlabeled candidates with ids, far board base in yellow](figures/week1_paint_review_sheet.jpg)
 
@@ -149,8 +117,8 @@ distances are analytic.
   and 15 ft outside the restraining lines.
 - **The corner radius is estimated per arena.** The boards are those of the hockey rink under
   the floor, and rinks differ. The radius is a parameter of the camera refinement, with a soft
-  prior towards 22 ft 8 in. The fit puts it at 25.2 ft in San Diego and 26.9 ft in Oshawa. The
-  85 ft width stays fixed as the scale.
+  prior towards 22 ft 8 in. The fit puts it at 25.2 ft in San Diego and 26.9 ft in Oshawa
+  (27.3 ft at 10 fps). The 85 ft width stays fixed as the scale.
 - **The floor length is fixed at the 200 ft rink standard.** No frame shows both ends, so the
   length trades off against camera distance and zoom. Freed on the 10 s clip with the faceoff dots
   left out, it goes to 209 ft, and the dots land 1.5 and 3.1 ft off, against 1.1 and 2.4 ft with
@@ -196,23 +164,40 @@ broadcast camera physically is:
   - A camera that turns and zooms about a fixed centre moves every static point by
     K<sub>b</sub> R<sub>b</sub> R<sub>a</sub><sup>T</sup> K<sub>a</sub><sup>−1</sup>, whatever its
     depth. The image distance between that prediction and the tracked point is a residual.
-  - Points are tracked only when neighbouring frames are at most 0.25 s apart (the 10 s clip at
-    10 fps, not Week 1 at 1 fps).
+  - Points are tracked only when neighbouring frames are at most 0.25 s apart: the 10 fps clips,
+    not the 1 fps keyframes.
   - This ties each frame's pan, tilt, roll and zoom to its neighbours'. Without it, stretches that
     show only two landmarks leave the camera underdetermined. Frames 22–45 of the 10 s clip show
     only the right restraining line and the far board base. Fitted without this term, the camera
     there tilts 60 px in one frame while the image barely moves vertically.
-- **Priors**: a weak pull towards VGGT-Omega's own per-frame pointing, plus smoothness between
-  neighbouring frames. Smoothing is switched off across broadcast cuts.
+- **Priors**: a weak pull towards VGGT-Omega's own per-frame pointing (or the propagated cameras,
+  `--seed-cameras`), plus smoothness between neighbouring frames. Smoothing is switched off across
+  broadcast cuts.
 
-Several starting centres are tried, from VGGT's centre to points much closer to the floor it looks
-at. Moving the centre re-aims every camera at the same floor point and rescales its focal length,
-which undoes VGGT's zoom-as-dolly motion. Residuals are floor distances divided by the local
+Several starting centres are tried, from VGGT-Omega's centre to points much closer to the floor it
+looks at. Moving the centre re-aims every camera at the same floor point and rescales its focal
+length, which undoes the zoom-as-dolly motion. Residuals are floor distances divided by the local
 feet-per-pixel, which approximates image pixels.
 
 Frames the shared camera cannot explain (cuts to another camera) are dropped from the shared fit and
 refitted with their own camera. If that still fails, they are flagged `unreliable` and left out of the
 exported homographies.
+
+### Full frame rate from checked keyframes
+
+Week 1 is fitted twice. The keyframe pass (every 10th frame, 1 fps) is labeled and checked by eye
+as above. The 10 fps pass reuses it:
+
+- `propagate_field_cameras.py` gives every 10 fps frame a camera. Anchors are the keyframe cameras
+  pinned by at least two painted lines or creases, because one line plus the boards lets the camera
+  slide along the floor while still fitting. Between two anchors, the camera is carried forward
+  and backward through the tracked background motion and the two chains are blended by time, so
+  drift closes at the anchors.
+- `build_field_paint_masks.py` keeps the checked keyframe masks and labels the other frames from
+  the propagated cameras.
+- `fit_field_plane_landmarks.py --seed-cameras` refines all 1,530 cameras together, with the
+  motion term. Its `camera_motion_check` then lists any frame that still disagrees with the tracked
+  motion.
 
 ### 3D placement
 
@@ -234,13 +219,13 @@ reconstruction as VGGT-Omega made it: the telephoto distortion and frame-to-fram
 described above, with a skewed logo and paint doubled where frames disagree.
 
 ![10 s clip, every 4th frame from above: raw VGGT-Omega geometry vs points placed through the refined cameras](figures/clip10s_topdown_raw_vs_refined.jpg)
-![Week 1, every 3rd frame from above](figures/week1_topdown_raw_vs_refined.jpg)
+![Week 1, every 3rd keyframe from above](figures/week1_topdown_raw_vs_refined.jpg)
 
 ## Evidence that the fit is right
 
 Positions of each landmark's pixels on the field, through the refined cameras:
 
-| landmark | model | 10 s clip | Week 1 |
+| landmark | model | 10 s clip | Week 1 keyframes |
 |---|---|---|---|
 | left restraining line | x = 57.5 ft | 57.50 ft (IQR 0.26) | 57.50 ft (IQR 0.28) |
 | midfield line | x = 100 ft | 100.00 ft (IQR 0.32) | 99.98 ft (IQR 0.21) |
@@ -259,52 +244,37 @@ Crease radii are measured to the centre of a 5 in line.
   The fit uses both. Without any dot, nothing fixes the near side. Camera distance then trades
   against zoom, and the near dot drifts by about 3 ft while every far-side landmark still fits.
 - **Held-out faceoff dots (Week 1).** No faceoff dot is used in the Week 1 fit. The painted dots
-  are found by colour within 90 px of where the fit projects them: 171 detections in which exactly
-  one small white blob lies near the projected spot. Lifted through the fit, they land 0.71 ft
-  from their rulebook spots (median; 90th percentile 1.6 ft; 13 px in the image).
+  are found by colour within 90 px of where the keyframe fit projects them: 171 detections in which
+  exactly one small white blob lies near the projected spot. Lifted through the fit, they land
+  0.71 ft from their rulebook spots (median; 90th percentile 1.6 ft; 13 px in the image).
 
   ![Week 1 held-out faceoff dots: green circle = the fit's projected spot](figures/week1_heldout_faceoff_dots.jpg)
 - **Camera position.**
   - 10 s clip: the recovered camera is 114 ft behind the near sideline and 50 ft up, level with
     centre floor. VGGT-Omega's own estimate is 216 ft back and 75 ft up.
-  - Week 1: the camera is 34 ft behind the near sideline and 20 ft up, with a 36° field of view.
-    148 of 153 frames fit this shared camera, 4 (cuts and close-ups) have their own camera, 1 has
-    no visible landmarks, and none are flagged `unreliable`.
-- **Camera motion check (10 s clip).** Over 97 neighbouring-frame pairs, the refined cameras move
-  the tracked background points to within 1.2 px of where they are measured (median). The worst
-  pair is 4.4 px, so no frame is over 5 px. Fitted without the motion term, the same cameras have
-  pairs at 83 px (frame 28) and 18 px (frame 46, where the faceoff dots enter the fit).
-  - Week 1 is sampled at 1 fps, so its frames are 1 s apart, too far to track reliably.
-  - Tracking is therefore used only when frames are at most 0.25 s apart, and Week 1 has
-    neither the term nor the check.
+  - Week 1: the camera is 34 ft behind the near sideline and 20 ft up, with a 36° field of view
+    (38° median at 10 fps). At 10 fps, 1,451 of 1,530 frames fit this shared camera and 79 are close-ups with no
+    positions; none are flagged `unreliable`.
+- **Camera motion check.** The refined cameras move the tracked background points to within
+  0.42 px of where they are measured (median over 1,447 neighbouring-frame pairs of Week 1 at
+  10 fps; worst pair 2.6 px) and 1.2 px on the 10 s clip (97 pairs; worst 4.4 px). No frame is over
+  5 px. Fitted without the motion term, the 10 s clip has pairs at 83 px (frame 28) and 18 px
+  (frame 46, where the faceoff dots enter the fit).
 - **Per landmark** (median / 90th percentile px):
 
-  | landmark | 10 s clip | Week 1 |
-  |---|---|---|
-  | midfield line | 4.8 / 9.6 | 2.5 / 5.2 |
-  | left restraining line | 3.1 / 5.4 | 1.5 / 3.0 |
-  | right restraining line | 2.9 / 7.0 | 1.8 / 4.3 |
-  | left crease | not visible | 1.9 / 5.2 |
-  | right crease | 3.2 / 10.7 | 2.4 / 6.9 |
-  | far board base | 2.5 / 9.3 | 1.8 / 10.4 |
-  | faceoff dots (upper / lower) | 5.4 / 11.0, 7.0 / 20.1 | not used |
+  | landmark | 10 s clip | Week 1 keyframes | Week 1 at 10 fps |
+  |---|---|---|---|
+  | midfield line | 4.8 / 9.6 | 2.5 / 5.2 | 2.7 / 6.1 |
+  | left restraining line | 3.1 / 5.4 | 1.5 / 3.0 | 1.5 / 2.9 |
+  | right restraining line | 2.9 / 7.0 | 1.8 / 4.3 | 1.7 / 3.7 |
+  | left crease | not visible | 1.9 / 5.2 | 1.9 / 5.1 |
+  | right crease | 3.2 / 10.7 | 2.4 / 6.9 | 2.3 / 6.5 |
+  | far board base | 2.5 / 9.3 | 1.8 / 10.4 | 1.7 / 8.4 |
+  | faceoff dots (upper / lower) | 5.4 / 11.0, 7.0 / 20.1 | not used | not used |
 
 ## Running it
 
-```bash
-python scripts/run_vggt_omega_clip.py --frames-dir "$FRAMES" --output "$RUN/vggt_omega_predictions.npz"
-
-# 1. landmark masks: detect paint and board edges, propose labels from a fit of the clip,
-#    apply the checked review, write review sheets
-python scripts/build_field_paint_masks.py --frames-dir "$FRAMES" --predictions "$RUN/vggt_omega_predictions.npz" \
-  --player-mask-dir "$SAM3/player_instance_masks_chunked" --fit "$RUN/field_fit/field_plane_fit.json" \
-  --review data/field_label_review/week1_1fps_undistorted.json --output-dir "$RUN/paint_masks"
-#    (10 s clip: add --floor-colours green,purple)
-
-# 2. field fit (10 s clip: also --landmark faceoff_right_upper=$DOTS#6 --landmark faceoff_right_lower=$DOTS#7)
-python scripts/fit_field_plane_landmarks.py --predictions "$RUN/vggt_omega_predictions.npz" --frames-dir "$FRAMES" \
-  --paint-masks "$RUN/paint_masks" --fps 1 --output-dir "$RUN/field_fit"
-```
+The commands are in the README's Run section.
 
 **Labeling a new clip.**
 
@@ -338,17 +308,14 @@ Outputs in `--output-dir`:
   - The fit's printed summary carries the same block, so a camera jump shows up without
     looking at any video.
 - `field_homographies.json`: per-frame image→field homographies in the `floor_homography_matrix_v1`
-  schema, with `field_dims`. This is the recommended way to map player foot pixels to the field;
-  `render_field_birds_eye.py` uses it for the bird's-eye player videos.
+  schema, with `field_dims`. `render_field_birds_eye.py` maps the players' foot points with them.
 - `field_reprojection_h264.mp4`: every frame with the rigid fit (top) and the refined fit (bottom) drawn on it.
 - `landmarks_on_field.jpg`: stage-1 lifted landmarks on the field diagram.
 
 `scripts/export_vggt_omega_vggt_layout.py` writes the reconstruction and the rigid fit in the
-518×518 VGGT layout (`vggt_predictions_compact.npz` and `field_fit_vggt_layout.json`). The
-depth-based consumers (`render_sam_body4d_vggt_birds_eye.py`, `view_vggt_reconstruction.py` and
-`run_cotracker_vggt_player_trajectories.py`) then run unchanged on VGGT-Omega. They get the stage-1
-rigid fit and the standard 200 × 85 ft drawing only; the per-frame camera refinement and the fitted
-dimensions are available only through `field_homographies.json`.
+518×518 layout that the SAM-Body4D mesh scripts read (`vggt_predictions_compact.npz` and
+`field_fit_vggt_layout.json`). The meshes are placed with the stage-1 rigid fit, not the per-frame
+refined cameras.
 
 `scripts/render_vggt_scene_3d.py` renders the VGGT-Omega point cloud on the fitted field:
 

@@ -1,3 +1,12 @@
+"""Click the corner faceoff dots in a few frames; the clicks become SAM2 point prompts.
+
+Serves a page at http://127.0.0.1:<port> showing the clip's frames. Pick a dot, click its
+centre; repeat in a few frames where it is clearly visible. Every click is saved at once
+to --output, together with the SAM2 prompts made from it (one SAM2 object per dot,
+IDs 6-9), which track_sam2_clicks.py tracks through the clip. The tracked dots are
+landmarks for fit_field_plane_landmarks.py (--landmark faceoff_right_upper=<masks>#6 ...).
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,40 +16,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from PIL import Image
 
+
+SAM2_OBJECT_IDS = {"right_upper": 6, "right_lower": 7, "left_upper": 8, "left_lower": 9}
 LANDMARKS = [
-    {"id": "center_spot", "label": "Center face-off spot", "x": 100.0, "y": 42.5},
-    {"id": "centerline_lower_board", "label": "Centerline lower board", "x": 100.0, "y": 0.0},
-    {"id": "centerline_upper_board", "label": "Centerline upper board", "x": 100.0, "y": 85.0},
-    {"id": "left_restrain_lower_board", "label": "Left restraining line lower board", "x": 57.5, "y": 0.0},
-    {"id": "left_restrain_upper_board", "label": "Left restraining line upper board", "x": 57.5, "y": 85.0},
-    {"id": "right_restrain_lower_board", "label": "Right restraining line lower board", "x": 142.5, "y": 0.0},
-    {"id": "right_restrain_upper_board", "label": "Right restraining line upper board", "x": 142.5, "y": 85.0},
-    {"id": "left_goal_center", "label": "Left goal center", "x": 12.0, "y": 42.5},
-    {"id": "right_goal_center", "label": "Right goal center", "x": 188.0, "y": 42.5},
-    {"id": "left_goal_lower_post", "label": "Left goal lower post", "x": 12.0, "y": 40.125},
-    {"id": "left_goal_upper_post", "label": "Left goal upper post", "x": 12.0, "y": 44.875},
-    {"id": "right_goal_lower_post", "label": "Right goal lower post", "x": 188.0, "y": 40.125},
-    {"id": "right_goal_upper_post", "label": "Right goal upper post", "x": 188.0, "y": 44.875},
-    {"id": "left_crease_front", "label": "Left crease front", "x": 21.25, "y": 42.5},
-    {"id": "left_crease_lower_chord", "label": "Left crease lower chord end", "x": 6.5, "y": 35.062},
-    {"id": "left_crease_upper_chord", "label": "Left crease upper chord end", "x": 6.5, "y": 49.938},
-    {"id": "right_crease_front", "label": "Right crease front", "x": 178.75, "y": 42.5},
-    {"id": "right_crease_lower_chord", "label": "Right crease lower chord end", "x": 193.5, "y": 35.062},
-    {"id": "right_crease_upper_chord", "label": "Right crease upper chord end", "x": 193.5, "y": 49.938},
-    {"id": "left_lower_faceoff", "label": "Left lower face-off dot", "x": 42.5, "y": 15.0},
-    {"id": "left_upper_faceoff", "label": "Left upper face-off dot", "x": 42.5, "y": 70.0},
-    {"id": "right_lower_faceoff", "label": "Right lower face-off dot", "x": 157.5, "y": 15.0},
-    {"id": "right_upper_faceoff", "label": "Right upper face-off dot", "x": 157.5, "y": 70.0},
-    {"id": "lower_left_tangent", "label": "Yellow boundary lower-left tangent", "x": 22.667, "y": 0.0},
-    {"id": "lower_right_tangent", "label": "Yellow boundary lower-right tangent", "x": 177.333, "y": 0.0},
-    {"id": "upper_left_tangent", "label": "Yellow boundary upper-left tangent", "x": 22.667, "y": 85.0},
-    {"id": "upper_right_tangent", "label": "Yellow boundary upper-right tangent", "x": 177.333, "y": 85.0},
-    {"id": "left_mid_board", "label": "Left end-board midpoint", "x": 0.0, "y": 42.5},
-    {"id": "right_mid_board", "label": "Right end-board midpoint", "x": 200.0, "y": 42.5},
-]
-
-FACEOFF_CORNER_LANDMARKS = [
     {"id": "left_upper", "label": "Left upper face-off point", "x": 42.5, "y": 70.0},
     {"id": "right_upper", "label": "Right upper face-off point", "x": 157.5, "y": 70.0},
     {"id": "left_lower", "label": "Left lower face-off point", "x": 42.5, "y": 15.0},
@@ -53,7 +33,7 @@ HTML = """<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Floor Homography Landmarks</title>
+  <title>Faceoff dots</title>
   <style>
     :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
     body { margin: 0; background: #111; color: #eee; }
@@ -96,9 +76,8 @@ HTML = """<!doctype html>
     </div>
     <aside>
       <div class="muted">
-        Select a visible floor landmark, then click its image position. Good points are line intersections,
-        face-off dots, crease extrema, goal posts, and yellow boundary tangencies. Calibrate several frames
-        if the broadcast camera pans or zooms.
+        Pick a faceoff dot, then click its centre. Click each dot in a few frames where it is clearly
+        visible; SAM2 tracks it through the rest of the clip.
       </div>
       <h3>Frame Status</h3>
       <div id="frameStatus" class="muted"></div>
@@ -171,7 +150,7 @@ HTML = """<!doctype html>
       }).join('');
       const byFrame = countsByFrame();
       const count = byFrame[frame] || 0;
-      frameStatus.innerHTML = `<span class="${count >= 4 ? 'ok' : 'warn'}">Current frame has ${count} point(s). Homography needs at least 4, 6+ is better.</span>`;
+      frameStatus.innerHTML = `<span class="ok">Current frame has ${count} click(s).</span>`;
     }
     frames.forEach(f => {
       const opt = document.createElement('option');
@@ -212,7 +191,7 @@ HTML = """<!doctype html>
       }
     };
     document.getElementById('clearAll').onclick = async () => {
-      if (confirm('Clear all floor calibration clicks?')) {
+      if (confirm('Clear all clicks?')) {
         clicks = [];
         render();
         await postClicks();
@@ -227,7 +206,7 @@ HTML = """<!doctype html>
 """
 
 
-class FloorAnnotatorHandler(BaseHTTPRequestHandler):
+class FaceoffClickHandler(BaseHTTPRequestHandler):
     frames: list[dict] = []
     landmarks: list[dict] = LANDMARKS
     frames_dir: Path
@@ -307,47 +286,37 @@ class FloorAnnotatorHandler(BaseHTTPRequestHandler):
                     },
                 }
             )
-        data = {
-            "schema": "floor_homography_clicks_v1",
-            "world_units": "feet",
-            "floor": {
-                "length_ft": 200.0,
-                "width_ft": 85.0,
-                "corner_radius_ft": 22.667,
-            },
-            "landmarks": self.landmarks,
-            "clicks": clicks,
-        }
+        prompts = [{"frame": c["frame"], "object_id": SAM2_OBJECT_IDS[c["landmark_id"]], "feature": c["landmark_id"],
+                    "points": [[c["image"]["x"], c["image"]["y"]]], "labels": [1]} for c in clicks if c["landmark_id"] in SAM2_OBJECT_IDS]
+        data = {"landmarks": self.landmarks, "clicks": clicks, "object_id_map": SAM2_OBJECT_IDS, "prompts": prompts}
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.output_path.write_text(json.dumps(data, indent=2) + "\n")
         self.send_json({"ok": True, "count": len(clicks), "path": str(self.output_path)})
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", default="outputs/prompt_frames/manifest.json")
-    parser.add_argument("--frames-dir", default="data/frames_10fps")
-    parser.add_argument("--output", default="outputs/floor_homography_clicks.json")
-    parser.add_argument("--landmark-set", choices=["all", "faceoff_corners"], default="all")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--frames-dir", required=True, help="The clip's frames (frame_NNNNN.jpg), before undistortion.")
+    parser.add_argument("--output", required=True, help="Clicks and SAM2 prompts JSON; reopened clicks are loaded from it.")
+    parser.add_argument("--fps", type=float, default=10.0)
     parser.add_argument("--port", type=int, default=8770)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    manifest = json.loads(Path(args.manifest).read_text())
-    handler = FloorAnnotatorHandler
-    handler.frames = manifest["frames"]
-    handler.landmarks = FACEOFF_CORNER_LANDMARKS if args.landmark_set == "faceoff_corners" else LANDMARKS
-    handler.width = int(manifest["width"])
-    handler.height = int(manifest["height"])
+    paths = sorted(Path(args.frames_dir).glob("frame_*.jpg"))
+    if not paths:
+        raise SystemExit(f"No frame_*.jpg files in {args.frames_dir}")
+    with Image.open(paths[0]) as image:
+        width, height = image.size
+    handler = FaceoffClickHandler
+    handler.frames = [{"frame": int(p.stem.split("_")[-1]), "time_sec": int(p.stem.split("_")[-1]) / args.fps} for p in paths]
+    handler.width, handler.height = width, height
     handler.frames_dir = Path(args.frames_dir)
     handler.output_path = Path(args.output)
-    server = ThreadingHTTPServer((args.host, args.port), handler)
-    print(f"Floor homography annotator: http://127.0.0.1:{args.port}")
-    print(f"Writing clicks to: {handler.output_path}")
-    print("Click at least 4 landmarks per calibrated frame; 6+ is better.")
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler)
+    print(f"Faceoff dots: http://127.0.0.1:{args.port}  (clicks and SAM2 prompts are saved to {handler.output_path})")
     server.serve_forever()
 
 

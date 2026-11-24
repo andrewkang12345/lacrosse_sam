@@ -22,6 +22,10 @@ floor paint by colour and labels every piece explicitly:
    vision model) can check every frame and write those overrides.
    Straight-line labels are trimmed to the pixels on one straight line.
 
+Close-up shots (a player at least --closeup-height of the image tall, sustained for
+--closeup-min-frames) come from other cameras. They get no landmarks and are listed
+under `closeup_frames` in labels.json, so the field fit leaves them out.
+
 Writes <output>/masks/NNNNNNNN.npz (object_ids, masks; numbered by position in
 the sorted frames directory like the SAM outputs) and <output>/labels.json,
 which fit_field_plane_landmarks.py reads through --paint-masks.
@@ -31,10 +35,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 from skimage.morphology import skeletonize
 
 import field_model as fm
@@ -387,6 +393,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--review", default=None, help='JSON {"frame_name": {"<id>": "<label>|reject", "board_base": "reject"}} of checked labels (keys starting with "_" are comments).'
     )
+    parser.add_argument("--closeup-height", type=float, default=0.45, help="A player this share of the image height marks a close-up frame.")
+    parser.add_argument("--closeup-min-frames", type=int, default=5, help="Close-up frames needed in a row (gaps up to 4 frames) to count as a close-up shot.")
+    parser.add_argument("--checked-masks", default=None, help="masks/ of a checked run on this clip's keyframes. Keyframes with at least two painted lines are copied; the others are detected and labeled from --fit.")
+    parser.add_argument("--keyframe-offset", type=int, default=0, help="Frame of this clip that is the first frame of --checked-masks.")
+    parser.add_argument("--keyframe-stride", type=int, default=1, help="Frames of this clip per frame of --checked-masks.")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--floor-colours", default="green", help=f"Comma-separated turf colours from {sorted(FLOOR_COLOURS_HSV)}.")
     parser.add_argument("--max-components", type=int, default=30)
@@ -394,6 +405,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sheet-cols", type=int, default=3)
     parser.add_argument("--sheet-rows", type=int, default=3)
     return parser.parse_args()
+
+
+def closeup_frames(mask_dir: Path | None, numbers: list[int], share: float, min_frames: int, max_gap: int = 4) -> set[int]:
+    """Frames of sustained shots in which a player fills a large part of the image height."""
+    if mask_dir is None:
+        return set()
+    tall = []
+    for number in numbers:
+        path = mask_dir / f"{number:08d}.npz"
+        if not path.exists():
+            continue
+        with np.load(path) as data:
+            masks = data["masks"].astype(bool)
+        if len(masks) == 0:
+            continue
+        rows = masks.any(axis=2)
+        spans = [np.flatnonzero(r)[[0, -1]] for r in rows if r.any()]
+        if spans and max(int(b - a + 1) for a, b in spans) >= share * masks.shape[1]:
+            tall.append(number)
+    runs: list[list[int]] = []
+    for number in tall:
+        if runs and number - runs[-1][-1] <= max_gap + 1:
+            runs[-1].append(number)
+        else:
+            runs.append([number])
+    return {n for run in runs if len(run) >= min_frames for n in range(run[0], run[-1] + 1)}
 
 
 def main() -> None:
@@ -411,10 +448,26 @@ def main() -> None:
     (out_dir / "masks").mkdir(parents=True, exist_ok=True)
     player_dir = Path(args.player_mask_dir) if args.player_mask_dir else None
 
+    closeups = closeup_frames(player_dir, [all_frames.index(n) for n in names], args.closeup_height, args.closeup_min_frames)
     report, tiles = {}, []
     counts = {label: 0 for label in PAINT_LABELS + ("unlabeled", "reject")}
     for name in names:
         number = all_frames.index(name)
+        if number in closeups:
+            with Image.open(frames_dir / name) as first:
+                size = first.size
+            np.savez_compressed(out_dir / "masks" / f"{number:08d}.npz", object_ids=np.zeros(0, np.int32), masks=np.zeros((0, size[1], size[0]), bool))
+            report[name] = {"candidates": [], "board_base_columns": 0, "reviewed": False, "closeup": True}
+            continue
+        if args.checked_masks and number >= args.keyframe_offset and (number - args.keyframe_offset) % args.keyframe_stride == 0:
+            checked = Path(args.checked_masks) / f"{(number - args.keyframe_offset) // args.keyframe_stride:08d}.npz"
+            if checked.exists():
+                with np.load(checked) as data:
+                    lines = sum(1 for oid, m in zip(data["object_ids"], data["masks"]) if int(oid) != OBJECT_IDS["board_base"] and int(m.sum()) >= 50)
+                if lines >= 2:
+                    shutil.copyfile(checked, out_dir / "masks" / f"{number:08d}.npz")
+                    report[name] = {"candidates": [], "board_base_columns": 0, "reviewed": True, "checked_keyframe": True}
+                    continue
         bgr = cv2.imread(str(frames_dir / name), cv2.IMREAD_COLOR)
         shape = bgr.shape[:2]
         players = load_union_mask(player_dir, number, shape)
@@ -474,13 +527,14 @@ def main() -> None:
                 "fit": args.fit,
                 "review": args.review,
                 "object_ids": OBJECT_IDS,
+                "closeup_frames": [n for n in names if all_frames.index(n) in closeups],
                 "frames": report,
             },
             indent=1,
         )
         + "\n"
     )
-    print(json.dumps({"output_dir": str(out_dir), "frames": len(names), "candidate_labels": counts, "review_sheets": len(sheets)}, indent=2))
+    print(json.dumps({"output_dir": str(out_dir), "frames": len(names), "closeup_frames": len(closeups), "candidate_labels": counts, "review_sheets": len(sheets)}, indent=2))
 
 
 if __name__ == "__main__":

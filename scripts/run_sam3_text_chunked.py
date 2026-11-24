@@ -1,3 +1,11 @@
+"""SAM3 text-prompt tracking of a long clip, in chunks of --chunk-size frames.
+
+Each chunk is tracked by track_sam3_text.py. Object IDs of chunk k are offset by
+k * --object-id-stride, so IDs never collide; link_sam3_chunk_tracks.py joins them
+across chunks. Writes one detections JSON (boxes, scores, object IDs per frame), label
+masks, per-frame instance masks (NNNNNNNN.npz: object_ids, masks) and an overlay video.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -15,7 +23,7 @@ from video_utils import load_pil_frames, overlay_masks, write_h264_video
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--frames-dir", required=True)
     parser.add_argument("--text", required=True)
     parser.add_argument("--model", default="facebook/sam3")

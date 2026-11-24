@@ -1,3 +1,5 @@
+"""Frame loading, mask overlays and H.264 writing shared by the tracking scripts."""
+
 from __future__ import annotations
 
 import colorsys

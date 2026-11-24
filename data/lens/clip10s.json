@@ -1,0 +1,64 @@
+{
+  "_note": "Lens model of the 10 s clip, estimated from the straightness of its SAM2-tracked painted lines at a 1074 px focal length. Applied with undistort_clip_from_text_line_masks.py --reuse-calibration.",
+  "image_size": [
+    1280,
+    720
+  ],
+  "camera_matrix": [
+    [
+      1074.315,
+      0.0,
+      640.0
+    ],
+    [
+      0.0,
+      1074.315,
+      360.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "new_camera_matrix": [
+    [
+      1203.4215421341446,
+      0.0,
+      639.9327606374729
+    ],
+    [
+      0.0,
+      1203.4769632706539,
+      359.9787551860559
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "dist_coeffs": [
+    0.3229554568460451,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "roi": [
+    0,
+    0,
+    1279,
+    719
+  ],
+  "metrics": {
+    "baseline_line_rms_px": 3.7984341291280894,
+    "best_line_rms_px": 3.541316426717318,
+    "line_rms_improvement_px": 0.25711770241077136,
+    "line_groups": 26,
+    "focal_px": 1074.315,
+    "k1_bound": 0.35,
+    "optimizer_success": true,
+    "optimizer_fun": 3.541316426717318
+  }
+}
